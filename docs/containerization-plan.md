@@ -1,8 +1,13 @@
-# 4scribe containerization plan (PLAN ONLY — no build/deploy)
+# 4scribe containerization plan (PLAN + PREPARED ARTIFACTS; NOT ACTIVE)
 
-Status: proposal for review. No image is built, no runtime/network/systemd/
-Tailscale change is made, and no cutover is authorized by this document.
-Review revision 2 fixes the network and drain ambiguities.
+Status: proposal plus permanent cutover artifacts prepared for owner review. The
+accepted trial image is now referenced by `deployment/compose.yaml`; the
+production listener remains the host unit. No cutover, image rebuild, registry
+upload, Tailscale change or secret read is authorized by this document. Review
+revision 2 fixed the network and drain ambiguities; revision 3 adds the permanent
+Compose/cutover/rollback artifacts and points to `docs/container-permanent.md`
+for the exact owner gate. See `docs/container-trial.md` for the accepted trial
+evidence.
 
 ## 1. Goal and shape
 
@@ -120,7 +125,9 @@ in-process aligner evidence: bf16 CPU, peak RAM ~2.6 GB per decision doc.
 - Owner gate before any cutover. Cutover (separately authorized): stop the host
   unit, run the container on `--port 8093`, keep the existing WSS route
   `/4scribe/v1/audio/transcriptions/realtime` unchanged. Exact rollback: stop
-  the container and start the existing host unit.
+  the container and start the existing host unit. Prepared artifacts and exact
+  commands: `deployment/compose.yaml`, `deployment/cutover-container.sh`,
+  `deployment/rollback-container.sh`, `docs/container-permanent.md`.
 
 ## 7. What is explicitly not in scope
 

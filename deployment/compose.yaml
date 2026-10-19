@@ -1,0 +1,82 @@
+# 4scribe permanent container runtime (PREPARED; not active until owner cutover).
+# Ollama stays external on the host loopback. This file intentionally contains
+# no token, model weights or host-specific secret values: the Bearer token is
+# supplied only through the root-owned env file below.
+#
+# The image tag is a persistent handle created from the accepted immutable image
+# ID by deployment/cutover-container.sh. That script verifies the ID again before
+# cutover and after container start; the tag alone is never treated as proof.
+name: fourscribe
+
+services:
+  fourscribe:
+    image: 4scribe:accepted-2026-10-19
+    pull_policy: never
+    container_name: fourscribe-container
+    restart: unless-stopped
+
+    # Host networking is required: the app binds host 127.0.0.1:8093 and uses
+    # the existing host Ollama at 127.0.0.1:11434. No port mapping; no Ollama
+    # or Tailscale change.
+    network_mode: host
+
+    user: "10001:10001"
+    group_add:
+      - "1000"  # read-only access to the i40min-group model cache
+
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m
+    security_opt:
+      - no-new-privileges:true
+
+    volumes:
+      - type: bind
+        source: /opt/40zen/services/4scribe/model-cache/hf
+        target: /models/hf
+        read_only: true
+
+    # Root-owned, mode 600; the Docker CLI (owner/root) reads it. Never print,
+    # copy, or pass this token on a command line.
+    env_file:
+      - /opt/40zen/secrets/4scribe.env
+
+    environment:
+      FSCRIBE_ALIGNER_HF_HOME: /models/hf
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      FSCRIBE_KEEP_ALIVE_S: "300"
+
+    # Port is explicit because FSCRIBE_PORT does not override uvicorn's CLI.
+    # The graceful timeout is bounded best-effort unwinding only; SIGTERM is
+    # not a final-ACK guarantee.
+    command:
+      - --port
+      - "8093"
+      - --timeout-graceful-shutdown
+      - "10"
+    stop_grace_period: 20s
+
+    # Conservative liveness only: /healthz, no auth token, no model load.
+    # Readiness/decode proof remains the previously accepted authenticated smoke,
+    # not /readyz (which only checks Ollama /api/tags reachability).
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen(
+          'http://127.0.0.1:8093/healthz', timeout=3).status == 200 else 1)
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+
+    labels:
+      com.40zen.service: "4scribe"
+      com.40zen.deployment: "container"
+      com.40zen.host-unit: "fourscribe.service"
+      com.40zen.accepted-image: "sha256:7708a83bff51186ec273612b63fe6e6575fb46971e49e74a5c226610791e6517"

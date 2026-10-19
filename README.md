@@ -12,6 +12,9 @@ release. Latency and noise-triggered hallucinations remain under investigation.
 - `src/fourscribe`: service, bounded queues, endpointing, ASR, alignment and optional sanitized lifecycle tracing.
 - `tests`: synthetic/mock protocol and regression tests; literal tokens are dummy credentials.
 - `deployment/smoke_wss.py`: authenticated streaming smoke test.
+- `deployment/compose.yaml`: permanent container runtime (prepared, not active).
+- `deployment/cutover-container.sh`, `deployment/rollback-container.sh`: owner-only idle cutover/rollback.
+- `docs/container-permanent.md`: container prerequisites, switch and rollback semantics.
 - `deployment/diagnostics`: standalone synthetic lifecycle diagnostic harness.
 - `deployment/replay/streaming_replay.py`: original-paced saved-audio replay utility.
 - `docs/pip-freeze-2026-10-16-completion.txt`: historical environment inventory, not a portable lockfile.
@@ -52,6 +55,17 @@ Configuration lives in `src/fourscribe/config.py`, including
 `FSCRIBE_ALIGNER_HF_HOME`, `FSCRIBE_ALIGNER_ENABLED` and bounded queue sizes.
 Some historical default paths reference the original experimental environment.
 A host-specific pipeline diagnostic and its dependent test remain local-only.
+
+## Container deployment (prepared, not active)
+
+The accepted image has a permanent Compose definition at
+`deployment/compose.yaml` and owner cutover/rollback scripts. The production
+listener is still the existing host service; the container is **not active**.
+The image tag is only a handle: the owner script verifies the accepted immutable
+image ID before and after cutover. The token stays in the root-owned external
+env file, the aligner cache is mounted read-only, and the Tailscale route is
+unchanged. See `docs/container-permanent.md` for prerequisites, exact owner
+command, health scope and rollback semantics.
 
 Pre-decode speech verification uses pinned `silero-vad==6.2.3` (MIT, bundled
 JIT model). Env-driven startup enables it by default; disable with

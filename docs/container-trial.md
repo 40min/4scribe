@@ -1,9 +1,27 @@
 # 4scribe isolated container trial (owner-runnable)
 
-Status: artifacts committed; **NOT BUILT / NOT TESTED by opencode** because the
-Docker socket is not accessible to the `opencode` user. No production cutover;
-the host unit on `127.0.0.1:8093` is unchanged. Review revision 2 adds the
-required safety, measurement and reproducibility corrections.
+Status: trial **ACCEPTED by the owner** on the immutable image below. The
+`opencode` agent still cannot access Docker/sudo, so it did not build, run or
+cut over anything. Production remains on the host unit at `127.0.0.1:8093`.
+Permanent Compose/cutover artifacts are prepared but **NOT ACTIVE**; see
+`docs/container-permanent.md`.
+
+## Accepted trial image
+
+| Item | Value |
+| --- | --- |
+| Local image | `4scribe-trial:local` (trial handle; may be cleaned up) |
+| Immutable image ID | `sha256:7708a83bff51186ec273612b63fe6e6575fb46971e49e74a5c226610791e6517` |
+| Source commit | `948073011112e3cd164ca8269388bc709e1cfa69` |
+| In-image tests | 83 passed |
+| Public two-stream result | RU 3 partials / 24-word final; EN 1 partial / 17-word final; word bounds, monotonicity, final-before-ACK and auth-negative 403 passed |
+| Memory | 842,010,624 bytes cgroup peak, excluding external Ollama |
+| Trial port | `127.0.0.1:18093`, removed after trial; 8093 was not switched |
+
+The permanent deployment uses the immutable ID above, not the mutable
+`4scribe-trial:local` tag. Run `deployment/cutover-container.sh` (as root) to
+create/reuse the persistent local tag `4scribe:accepted-2026-10-19`, verify its
+ID, and switch. Do not remove or retag the accepted image before that.
 
 ## Artifacts
 
@@ -14,6 +32,10 @@ required safety, measurement and reproducibility corrections.
 | `requirements-container.txt` | direct + critical transitive pins from the accepted host inventory |
 | `deployment/fetch_trial_fixtures.py` | checked-in fetcher for three pinned PUBLIC CC BY 4.0 clips (~2 MB: short RU, long 11.35 s RU, EN), hash-verified, PCM16 16 kHz |
 | `deployment/container-trial.sh` | fail-closed preflight, build, in-image hermetic tests, isolated 18093 host-network trial, RU+EN smokes, selected measurements, owned-only cleanup |
+| `deployment/compose.yaml` | permanent host-network runtime for the accepted image; non-root, read-only root, tmpfs, model cache `:ro`, external env file, `unless-stopped` |
+| `deployment/cutover-container.sh` | owner/root idle-only switch with image-ID verification, host-unit disable, bounded health/verifier check and automatic rollback |
+| `deployment/rollback-container.sh` | owner/root idle-only rollback to the existing host unit; preserves container logs, image, venv, models and token |
+| `docs/container-permanent.md` | permanent prerequisites, switch/rollback semantics and readiness honesty |
 
 The image bakes no aligner weights, no token and no host/tailnet identifier.
 The 1.8 GB aligner cache is a read-only bind mount; the Silero JIT is part of
@@ -87,7 +109,11 @@ No credential or permission bypass was attempted.
 
 ## Rollback/cleanup
 
-The script self-cleans its own container. If it is ever interrupted before the
-trap, the owner can remove the exact named container/id and then
-`docker rmi 4scribe-trial:local`. Cutover to 8093 is a separate owner gate and
-is not authorized here.
+The trial script self-cleans its own container. If it is ever interrupted before
+the trap, the owner can remove the exact named trial container/id. **Do not
+remove the accepted image by ID.** The trial tag `4scribe-trial:local` is
+disposable only after the persistent tag `4scribe:accepted-2026-10-19` exists and
+resolves to the accepted ID; removing the trial tag earlier can make the accepted
+image unavailable locally. Cutover to 8093 is a separate owner gate and is not
+authorized here; use `docs/container-permanent.md` for the prepared cutover and
+rollback commands.

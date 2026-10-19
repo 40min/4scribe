@@ -12,6 +12,9 @@
 !/tests/*.py
 /deployment/*
 !/deployment/smoke_wss.py
+!/deployment/compose.yaml
+!/deployment/cutover-container.sh
+!/deployment/rollback-container.sh
 !/deployment/diagnostics/
 !/deployment/replay/
 /deployment/diagnostics/*
@@ -20,6 +23,7 @@
 !/deployment/replay/*.py
 /docs/*
 !/docs/pip-freeze-2026-10-16-completion.txt
+!/docs/container-permanent.md
 # Never track generated caches, credentials, model weights or recordings.
 **/__pycache__/
 *.py[cod]
