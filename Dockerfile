@@ -25,6 +25,8 @@ RUN pip install --no-cache-dir --no-deps qwen-asr==0.0.6
 
 COPY src ./src
 COPY tests ./tests
+# Hermetic smoke-contract tests load this utility directly.
+COPY deployment/smoke_wss.py ./deployment/smoke_wss.py
 
 # Non-root numeric runtime user (no passwd entry needed; HOME=/tmp). The image
 # is intended to run with --read-only and a writable /tmp tmpfs; no model

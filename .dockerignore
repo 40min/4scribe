@@ -11,3 +11,7 @@
 **/*.pyc
 **/*.pyo
 **/*.pyd
+
+# Only this public verifier is needed by image-contained mock tests.
+!deployment
+!deployment/smoke_wss.py
