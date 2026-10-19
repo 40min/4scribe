@@ -1,0 +1,37 @@
+# Default deny: explicitly tracked source/public tooling only.
+/*
+!/.gitignore
+!/README.md
+!/src/
+!/tests/
+!/deployment/
+!/docs/
+/src/*
+!/src/fourscribe/
+/tests/*
+!/tests/*.py
+/deployment/*
+!/deployment/smoke_wss.py
+!/deployment/diagnostics/
+!/deployment/replay/
+/deployment/diagnostics/*
+!/deployment/diagnostics/*.py
+/deployment/replay/*
+!/deployment/replay/*.py
+/docs/*
+!/docs/pip-freeze-2026-10-16-completion.txt
+# Never track generated caches, credentials, model weights or recordings.
+**/__pycache__/
+*.py[cod]
+*.bak
+.env
+.env.*
+*.wav
+*.mp3
+*.flac
+*.safetensors
+*.gguf
+
+# Local-only harness contains private host routing metadata.
+/deployment/diagnostics/diagnose_real_pipeline.py
+/tests/test_diag_units.py
