@@ -40,7 +40,7 @@ def mock():
 
 @pytest.fixture
 def client_factory(mock):
-    def make(cfg=None, mock_delay=0.02, aligner="fake", freq_texts=None):
+    def make(cfg=None, mock_delay=0.02, aligner="fake", freq_texts=None, verifier=None):
         mock.delay_s = mock_delay
         mock.freq_texts = freq_texts or {}
         cfg = cfg or Config(token="test-token", ollama_url="http://mock-ollama",
@@ -51,7 +51,7 @@ def client_factory(mock):
         elif al == "unavailable":
             from fourscribe.aligner import UnavailableAligner
             al = UnavailableAligner()
-        return TestClient(appmod.create_app(cfg, lambda: httpx.Client(transport=mock.transport(), base_url=cfg.ollama_url), aligner=al))
+        return TestClient(appmod.create_app(cfg, lambda: httpx.Client(transport=mock.transport(), base_url=cfg.ollama_url), aligner=al, verifier=verifier))
     return make
 
 

@@ -27,6 +27,7 @@ from .asr import OllamaChat
 from .config import Config
 from .lifecycle_trace import new_session_tracer
 from .session import RealtimeSession
+from .verifier import get_verifier
 
 logger = logging.getLogger("fscribe")
 
@@ -104,7 +105,7 @@ class BoundedEventQueue:
         return len(self._q)
 
 
-def create_app(cfg: Config = None, http_factory=None, aligner=None):
+def create_app(cfg: Config = None, http_factory=None, aligner=None, verifier=None):
     cfg_provided = cfg is not None
     cfg = cfg or Config.from_env()
     if not cfg_provided:
@@ -122,16 +123,22 @@ def create_app(cfg: Config = None, http_factory=None, aligner=None):
                 "launches may set FSCRIBE_ALLOW_TEST_TOKEN=1.")
     asr = OllamaChat(cfg, http=http_factory() if http_factory else None)
     aligner = aligner or get_aligner(cfg)
+    # One shared verifier for every session: the verifier lock + single-worker
+    # executor serialize Silero state reset/inference across streams.
+    verifier = verifier if verifier is not None else get_verifier(cfg)
     pool = concurrent.futures.ThreadPoolExecutor(
         max_workers=cfg.inference_workers, thread_name_prefix="fscribe-decode")
     align_pool = concurrent.futures.ThreadPoolExecutor(
         max_workers=cfg.aligner_workers, thread_name_prefix="fscribe-align")
+    vad_pool = concurrent.futures.ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="fscribe-vad")
     align_sem = asyncio.Semaphore(cfg.aligner_workers)
     decode_sem = asyncio.Semaphore(cfg.inference_workers)
     app = FastAPI(title="4scribe", version="0.1.0")
 
     async def _healthz_impl():
         return {"ok": True, "aligner": aligner.name,
+                "verifier": verifier.name,
                 "word_timestamps": bool(aligner.available)}
 
     async def _readyz_impl():
@@ -167,7 +174,8 @@ def create_app(cfg: Config = None, http_factory=None, aligner=None):
 
         session = RealtimeSession(cfg, asr, aligner, pool, sink,
                                   align_pool=align_pool, align_sem=align_sem,
-                                  decode_sem=decode_sem, tracer=tracer)
+                                  decode_sem=decode_sem, tracer=tracer,
+                                  verifier=verifier, vad_pool=vad_pool)
 
         # HARD overload path: one bounded shutdown task (never per event);
         # must not depend on the possibly stalled pump.

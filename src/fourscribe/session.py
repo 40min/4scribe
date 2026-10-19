@@ -44,6 +44,7 @@ from . import events
 from .aligner import AlignerUnavailable, AlignmentFault
 from .asr import OllamaDecodeError
 from .vad_gate import SpeechGate
+from .verifier import NullVerifier
 from .wavwrap import seconds_of
 
 MIN_SPEECH_FOR_FINAL = 0.25  # ignore sub-onset blips for endpoint finals
@@ -53,10 +54,17 @@ PREROLL_RING_S = 0.35  # samples kept to seed a segment at its exact onset frame
 
 class RealtimeSession:
     def __init__(self, cfg, asr, aligner, pool, sink, align_pool=None,
-                 align_sem=None, decode_sem=None, tracer=None):
+                 align_sem=None, decode_sem=None, tracer=None, verifier=None,
+                 vad_pool=None):
         self.cfg = cfg
         self.asr = asr
         self.aligner = aligner
+        # Shared pre-decode verifier. app.create_app injects the single
+        # process-wide Silero verifier; direct construction defaults to the
+        # accept-all NullVerifier (documented safe fallback, never a silent
+        # rejection). Verification itself runs in vad_pool, never here.
+        self.verifier = verifier or NullVerifier()
+        self._vad_pool = vad_pool
         # optional metadata-only lifecycle tracer (see lifecycle_trace.py);
         # None by default: zero behavioural impact, no tracing cost
         self.tracer = tracer
@@ -96,7 +104,8 @@ class RealtimeSession:
         self.stats = {"frames": 0, "partials": 0, "finals": 0,
                       "declined_decode": 0, "overflows": 0, "headline_errors": 0,
                       "dropped_deltas_backpressure": 0, "dropped_finals_backlog": 0,
-                      "declined_stale_partial": 0, "ring_misses": 0}
+                      "declined_stale_partial": 0, "ring_misses": 0,
+                      "verifier_declines": 0, "verifier_faults": 0}
 
     # ---- clock helpers (epoch coordinates from the absolute sample clock) ----
 
@@ -207,6 +216,35 @@ class RealtimeSession:
             off = 0
         return bytes(self.ring[off:])
 
+    async def _verify_speech(self, pcm: bytes, *, kind: str) -> bool:
+        """Shared pre-decode Silero check on the exact segment PCM.
+
+        Never blocks the event loop (vad_pool, single worker + verifier lock).
+        A runtime verifier fault is explicit and fails OPEN: the audio is
+        accepted so a broken verifier can never silently delete real speech.
+        """
+        v = self.verifier
+        if v is None or not getattr(v, "enabled", False):
+            return True
+        loop = asyncio.get_running_loop()
+        try:
+            if self._vad_pool is not None:
+                ok = await loop.run_in_executor(self._vad_pool, v.verify, pcm)
+            else:
+                ok = await loop.run_in_executor(None, v.verify, pcm)
+        except Exception as exc:  # noqa: BLE001 - explicit fallback, never silence
+            self.stats["verifier_faults"] += 1
+            if self.tracer:
+                self.tracer.record("verifier_fault", kind=kind,
+                                   err_kind=type(exc).__name__)
+            self.emit(events.error_event("verifier_error", type(exc).__name__))
+            return True
+        if not ok:
+            self.stats["verifier_declines"] += 1
+            if self.tracer:
+                self.tracer.record("verifier_decline", kind=kind)
+        return bool(ok)
+
     def _trigger_overflow(self):
         self.stats["overflows"] += 1
         self.overflow = True
@@ -245,6 +283,11 @@ class RealtimeSession:
             self.tracer.record("partial_admit", job_id=jid, abs_end_samp=end_abs)
         try:
             async with self.decode_lock:
+                if (gen != self.generation or self.closed
+                        or self.epoch_start_samples != epoch_start_snapshot):
+                    return  # stale before spending verifier/ASR work
+                if not await self._verify_speech(pcm, kind="partial"):
+                    return  # no partial text, no ASR, no aligner, buffer untouched
                 text = await self.run_decode(pcm, gen, is_partial=True, job_id=jid)
                 if (gen != self.generation or self.closed
                         or self.epoch_start_samples != epoch_start_snapshot):
@@ -421,7 +464,10 @@ class RealtimeSession:
                 # stays for genuine decodes; empty-buffer commits just ACK.
                 pass
             elif self.language is not None and not self.closed and gen == self.generation:
-                text = await self.run_decode(pcm, gen, job_id=jid)
+                if await self._verify_speech(pcm, kind="final"):
+                    text = await self.run_decode(pcm, gen, job_id=jid)
+                else:
+                    text = ""  # reject: no ASR, no aligner; commit ACK still runs below
             if gen != self.generation or self.closed:
                 return  # cancelled/voided while compute ran (capacity was retained)
             if text.strip() and speech_present(pcm, self._gate):

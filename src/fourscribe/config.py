@@ -44,6 +44,11 @@ class Config:
     aligner_workers: int = 2
     max_pending_finals: int = 4
     outbound_queue_max: int = 512
+    # Pre-decode Silero speech verification. Dataclass default is OFF so
+    # explicit Config() construction (tests/embedding) is unchanged; the
+    # env-driven production launch (Config.from_env) enables it by default.
+    # Disable live with FSCRIBE_SILERO_ENABLED=0.
+    silero_enabled: bool = False
 
     @classmethod
     def from_env(cls):
@@ -61,4 +66,5 @@ class Config:
             aligner_workers=_int("FSCRIBE_ALIGNER_WORKERS", 2),
             max_pending_finals=_int("FSCRIBE_MAX_PENDING_FINALS", 4),
             outbound_queue_max=_int("FSCRIBE_OUTBOUND_QUEUE_MAX", 512),
+            silero_enabled=(os.environ.get("FSCRIBE_SILERO_ENABLED", "1") != "0"),
         )

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fourscribe import app as appmod
 from fourscribe.config import Config
+from fourscribe.verifier import NullVerifier
 from tests.conftest import FakeAligner
 
 
@@ -41,7 +42,7 @@ def test_env_real_token_accepted(monkeypatch):
     monkeypatch.setenv("FSCRIBE_TOKEN", "fscribe-live-0000000000000000")
     monkeypatch.setenv("FSCRIBE_OLLAMA_URL", "http://mock-ollama")
     monkeypatch.delenv("FSCRIBE_ALLOW_TEST_TOKEN", raising=False)
-    app = appmod.create_app(aligner=FakeAligner())
+    app = appmod.create_app(aligner=FakeAligner(), verifier=NullVerifier())
     for path in appmod.REALTIME_WS_PATHS:
         assert any(route.path == path for route in app.router.routes)
 
@@ -49,7 +50,7 @@ def test_env_real_token_accepted(monkeypatch):
 def test_allow_test_token_optout(monkeypatch):
     monkeypatch.delenv("FSCRIBE_TOKEN", raising=False)
     monkeypatch.setenv("FSCRIBE_ALLOW_TEST_TOKEN", "1")
-    app = appmod.create_app(aligner=FakeAligner())
+    app = appmod.create_app(aligner=FakeAligner(), verifier=NullVerifier())
     assert app
 
 

@@ -53,6 +53,13 @@ Configuration lives in `src/fourscribe/config.py`, including
 Some historical default paths reference the original experimental environment.
 A host-specific pipeline diagnostic and its dependent test remain local-only.
 
+Pre-decode speech verification uses pinned `silero-vad==6.2.3` (MIT, bundled
+JIT model). Env-driven startup enables it by default; disable with
+`FSCRIBE_SILERO_ENABLED=0`. It runs on the exact segment PCM before ASR for
+partials and finals; rejection emits no text and no aligner call, but a commit
+still ACKs and the clock continues. If enabled and the verifier cannot load,
+startup fails explicitly. See `docs/silero-predecode-trial.md`.
+
 ## Tests
 
 Core mock tests need no model server or downloads:
