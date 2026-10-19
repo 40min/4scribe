@@ -93,6 +93,23 @@ commit still ACKs (finals-before-ACK preserved).
 - Core suite: **69 passed** (`--ignore` the local-only aligner-cache/diag/trace
   modules per README).
 
+## Word-boundary correction
+
+`audio_processed` is the epoch end of the segment, not the segment duration.
+The accepted short fixture showed the last word end at 1.52 s while the final
+segment ended at 1.46 s: the aligner's relative word end overshot the exact PCM
+segment by 60 ms. `audio_processed` was not the cause.
+
+`aligner.validate_words(words, duration_s)` now checks words against the exact
+segment duration before the session maps relative times into the absolute epoch.
+Only a word **end** may be clamped, and only when the overshoot is at most
+`WORD_END_TOLERANCE_S = 0.080 s` (one Qwen3-ForcedAligner 80 ms AuT frame).
+Exact-end and interior times, word text/order, and monotonicity are preserved.
+A start after the boundary, non-finite/negative/unordered intervals, or an end
+overshoot beyond tolerance remain explicit `AlignmentFault`; the existing final
+policy applies (text retained, empty words + fault metadata, no fatal wire
+event). No uniform/fabricated times and no ASR model change.
+
 ## Rollback (complete to baseline)
 
 ```bash

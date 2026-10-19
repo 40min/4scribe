@@ -145,12 +145,13 @@ EN_RC=1
 set +e
 "$PY" "$ROOT/deployment/smoke_wss.py" \
   --url "ws://127.0.0.1:$PORT/v1/audio/transcriptions/realtime" \
-  --token-file "$TOKEN_FILE" --fixture "$FIX/ru_normal_01.wav" --fixture ru \
+  --token-file "$TOKEN_FILE" --fixture "$FIX/ru_long_01.wav" --fixture ru \
   > "$TRIAL_DIR/smoke_ru.log" 2>&1 &
 RU_PID=$!
 "$PY" "$ROOT/deployment/smoke_wss.py" \
   --url "ws://127.0.0.1:$PORT/v1/audio/transcriptions/realtime" \
   --token-file "$TOKEN_FILE" --fixture "$FIX/en_normal_01.wav" --fixture en \
+  --allow-no-deltas \
   > "$TRIAL_DIR/smoke_en.log" 2>&1 &
 EN_PID=$!
 wait "$RU_PID"; RU_RC=$?

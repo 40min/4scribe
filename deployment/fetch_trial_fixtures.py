@@ -31,6 +31,15 @@ SOURCES = [
         "license": "CC BY 4.0 (Russian LibriSpeech upstream)",
     },
     {
+        "id": "ru_long_01",
+        "dataset": "istupakov/russian_librispeech",
+        "config": "default",
+        "split": "test",
+        "row": 0,
+        "sha256": "14d2f1b21d7e48e04732ca489e66b6ca084446526d54fbf2d7716b5145f841d5",
+        "license": "CC BY 4.0 (Russian LibriSpeech upstream)",
+    },
+    {
         "id": "en_normal_01",
         "dataset": "hf-internal-testing/librispeech_asr_dummy",
         "config": "clean",

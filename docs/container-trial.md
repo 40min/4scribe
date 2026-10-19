@@ -12,7 +12,7 @@ required safety, measurement and reproducibility corrections.
 | `Dockerfile` | one app+Silero+aligner image; external Ollama; pinned `python:3.14.4-slim` digest and `torch==2.14.1+cpu`; `qwen-asr` installed `--no-deps` like the host venv |
 | `.dockerignore` | deny-all allowlist: `requirements-container.txt`, `src/`, `tests/`; `**/__pycache__/` and `**/*.pyc` excluded even under src/tests |
 | `requirements-container.txt` | direct + critical transitive pins from the accepted host inventory |
-| `deployment/fetch_trial_fixtures.py` | checked-in fetcher for two pinned PUBLIC CC BY 4.0 fixtures (~2 MB), hash-verified, PCM16 16 kHz |
+| `deployment/fetch_trial_fixtures.py` | checked-in fetcher for three pinned PUBLIC CC BY 4.0 clips (~2 MB: short RU, long 11.35 s RU, EN), hash-verified, PCM16 16 kHz |
 | `deployment/container-trial.sh` | fail-closed preflight, build, in-image hermetic tests, isolated 18093 host-network trial, RU+EN smokes, selected measurements, owned-only cleanup |
 
 The image bakes no aligner weights, no token and no host/tailnet identifier.
@@ -52,6 +52,16 @@ touched.
 - Torch threading is reported as `torch_threads_default_probe` because
   `docker exec python` starts a NEW process; it is not the running service's
   effective thread count. No runtime code change was made.
+
+## Partial expectations
+
+A ~2.10 s phrase can legitimately close before the first partial cadence (the
+partial interval is not a mandatory first-delta delay; the long 11.35 s RU
+fixture produced its first delta at ~1.1 s). `deployment/smoke_wss.py` therefore
+has an explicit `--allow-no-deltas` mode for short final-only fixtures, while
+final-nonempty, word-match, finals-before-ACK and authentication-negative
+checks stay mandatory. The container trial requires partials on the pinned
+11.35 s RU fixture and allows no deltas for the shorter EN run.
 
 ## Exact owner command
 

@@ -137,9 +137,15 @@ def _words_ok(words, transcript, audio_processed):
     return ""
 
 
-async def auth_session(url, token, fixture_path, language, ack_timeout_s: float = 180.0):
+async def auth_session(url, token, fixture_path, language, ack_timeout_s: float = 180.0,
+                       require_partials: bool = True):
     """Paced authenticated session: session.update -> realtime-paced PCM
-    frames -> client-side commit -> collect until the REQUIRED ACK event."""
+    frames -> client-side commit -> collect until the REQUIRED ACK event.
+
+    ``require_partials=False`` is for short fixtures where a sub-2.5 s phrase
+    can legitimately close before the first partial cadence; final/words/ACK
+    checks remain mandatory.
+    """
     with wave.open(fixture_path, "rb") as w:
         if (w.getframerate(), w.getnchannels(), w.getsampwidth()) != (16000, 1, 2):
             print(f"[FAIL] fixture {fixture_path}: must be PCM16 mono 16 kHz")
@@ -208,7 +214,8 @@ async def auth_session(url, token, fixture_path, language, ack_timeout_s: float 
             if applied.get("words") is not True:
                 problems.append(f"session.updated applied words {applied.get('words')!r} is not True")
         if not deltas:
-            problems.append("no provisional revisions (deltas) during paced speech")
+            if require_partials:
+                problems.append("no provisional revisions (deltas) during paced speech")
         else:
             aps = [d.get("audio_processed") for d in deltas]
             if any(not isinstance(a, (int, float)) for a in aps):
@@ -266,6 +273,8 @@ async def main():
                     help="read-only path to the credential file; read in-process, never printed")
     ap.add_argument("--fixture", action="append", required=True,
                     help="public PCM16/16k mono WAV fixture; given as path then language code")
+    ap.add_argument("--allow-no-deltas", action="store_true",
+                    help="short fixture may legitimately close before the first partial cadence; final/words/ACK remain mandatory")
     args = ap.parse_args()
     ok = False
     try:
@@ -296,7 +305,8 @@ async def main():
     if not ok:
         print("AUTH-PHASE FAILED; not proceeding to session checks")
     for i in range(0, len(args.fixture), 2):
-        ok &= await auth_session(args.url, token, args.fixture[i], args.fixture[i + 1])
+        ok &= await auth_session(args.url, token, args.fixture[i], args.fixture[i + 1],
+                                 require_partials=not args.allow_no_deltas)
     print("SMOKE:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 

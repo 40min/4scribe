@@ -44,7 +44,7 @@ monotonic = time.monotonic
 logger = logging.getLogger("fscribe")
 
 from . import events
-from .aligner import AlignerUnavailable, AlignmentFault
+from .aligner import AlignerUnavailable, AlignmentFault, validate_words
 from .asr import OllamaDecodeError
 from .vad_gate import SpeechGate
 from .verifier import NullVerifier
@@ -379,7 +379,11 @@ class RealtimeSession:
             try:
                 fn = (lambda: self.aligner.align(pcm, text, self.language))
                 words = await loop.run_in_executor(self._align_pool, fn)
-                return list(words or []), {"status": "ok", "backend": self.aligner.name}
+                # Validate/clamp against the EXACT segment PCM BEFORE session
+                # maps relative times into the absolute epoch coordinate.
+                words = validate_words(
+                    words or [], (len(pcm) // 2) / self.cfg.sample_rate)
+                return list(words), {"status": "ok", "backend": self.aligner.name}
             except AlignerUnavailable as exc:
                 return [], {"status": "fault", "reason": "aligner_unavailable",
                             "detail": str(exc)[:120]}

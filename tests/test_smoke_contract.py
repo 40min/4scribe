@@ -101,6 +101,50 @@ class _LibraryAlignerFake:
                 if any(ch == "'" or ch.isalnum() for ch in w["word"])]
 
 
+class _NoDeltaServer:
+    """Short-final-only wire: session.updated, final, ACK, no delta events."""
+
+    def __init__(self):
+        self.events = [
+            {"type": "session.updated", "event_id": "u1",
+             "session": {}, "applied": {"language": "ru", "words": True}},
+            {"type": "conversation.item.input_audio_transcription.completed",
+             "event_id": "f1", "transcript": "тест",
+             "audio_processed": 1.2,
+             "words": [{"word": "тест", "start": 0.1, "end": 0.3}],
+             "alignment": {"status": "ok"}},
+            {"type": "input_audio_buffer.committed", "event_id": "a1",
+             "audio_processed": 0.0},
+        ]
+
+    async def recv(self):
+        if self.events:
+            return json.dumps(self.events.pop(0))
+        await asyncio.Event().wait()
+
+    async def send(self, _data):
+        return None
+
+    async def close(self):
+        return None
+
+
+def test_smoke_short_final_only_can_explicitly_allow_no_deltas(
+        smoke, fixture_wav, monkeypatch):
+    import websockets
+    fake = _NoDeltaServer()
+    monkeypatch.setattr(websockets, "connect", _fake_connect_factory(fake), raising=False)
+    assert asyncio.run(smoke.auth_session(
+        "ws://127.0.0.1:1/v1/audio/transcriptions/realtime", "tok",
+        fixture_wav, "ru", require_partials=False))
+
+    strict = _NoDeltaServer()
+    monkeypatch.setattr(websockets, "connect", _fake_connect_factory(strict), raising=False)
+    assert not asyncio.run(smoke.auth_session(
+        "ws://127.0.0.1:1/v1/audio/transcriptions/realtime", "tok",
+        fixture_wav, "ru")), "default smoke must still require partials"
+
+
 def test_smoke_expect_reject_shapes_against_local_mock_service(server_factory, smoke):
     base, mock = server_factory(token="smoke-contract-token")
     url = f"ws://{base}/4scribe/v1/audio/transcriptions/realtime"

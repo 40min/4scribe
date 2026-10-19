@@ -43,7 +43,22 @@ class Aligner:
         raise NotImplementedError
 
 
-def _validate_words(words):
+#: Qwen3-ForcedAligner timestamps are discretized by the 80 ms AuT frame.
+#: A word end may overshoot the exact PCM segment by at most one frame; only
+#: the END is clamped (never start/interior/sequence). Larger errors are faults.
+ALIGNER_TIMESTAMP_RESOLUTION_S = 0.080
+WORD_END_TOLERANCE_S = ALIGNER_TIMESTAMP_RESOLUTION_S
+
+
+def validate_words(words, duration_s=None):
+    """Validate word intervals, optionally against the exact PCM duration.
+
+    Preserves the exact word sequence and interior times. If ``duration_s`` is
+    supplied and a word END overshoots it by <= one aligner frame (80 ms), the
+    END is clamped to the segment boundary. A word START after the boundary,
+    non-finite/negative/unordered intervals, or an END overshoot beyond the
+    tolerance raises AlignmentFault (never silently dropped or fabricated).
+    """
     out = []
     prev_end = None
     for w in words:
@@ -52,6 +67,13 @@ def _validate_words(words):
             raise AlignmentFault("invalid word interval")
         if prev_end is not None and a < prev_end - 1e-6:
             raise AlignmentFault("overlapping/unordered word times")
+        if duration_s is not None:
+            if a > duration_s:
+                raise AlignmentFault("word start beyond segment duration")
+            if b > duration_s:
+                if b - duration_s > WORD_END_TOLERANCE_S + 1e-9:
+                    raise AlignmentFault("word end exceeds segment duration tolerance")
+                b = duration_s
         out.append({"word": str(w["word"]), "start": round(a, 3), "end": round(b, 3)})
         prev_end = b
     return out
@@ -160,7 +182,7 @@ class QwenForcedAligner:
             raise AlignmentFault("aligner returned no words")
         words = [{"word": it.text, "start": it.start_time, "end": it.end_time}
                  for it in res.items]
-        return _validate_words(words)
+        return validate_words(words, arr.size / 16000.0)
 
 
 def get_aligner(cfg=None) -> Aligner:
