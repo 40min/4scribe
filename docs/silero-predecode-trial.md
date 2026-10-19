@@ -25,9 +25,11 @@ restart; `get_verifier` then returns the accept-all `NullVerifier`.
 
 **⚠️ Failure policy:** if the verifier is enabled but its package/model cannot
 load, startup fails explicitly (`VerifierUnavailable`) - never a silent
-rejection path. A verifier fault at runtime emits an explicit `verifier_error`
-wire event and fails **open** (audio is still decoded): a broken verifier cannot
-delete real speech.
+rejection path. A verifier fault at runtime fails **open** (audio is still
+decoded) and is recorded server-side only: `logger.warning` with the sanitized
+exception class, `stats["verifier_faults"]`, and a tracer record. It deliberately
+does NOT send a wire `type:error`, because the Loqui client treats every wire
+error as fatal and would close the socket / lose the generation.
 
 **⚠️ Accepted limitation:** the old energy gate can still miss quiet speech; this
 trial tests ghost suppression only and does not recover those misses. The

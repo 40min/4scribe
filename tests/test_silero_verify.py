@@ -154,18 +154,19 @@ def test_rejected_partial_never_calls_asr(client_factory, mock):
         assert mock.requests == [], "rejected partial must not call ASR"
 
 
-def test_verifier_fault_is_explicit_and_fails_open(client_factory, mock):
+def test_verifier_fault_is_server_side_only_and_fails_open(client_factory, mock):
     client = client_factory(cfg=_cfg(), verifier=FaultVerifier())
     with _session(client, lang="ru", endpointing=800) as (ws, _):
         ws.send_bytes(speech_pcm(0.6))
         _commit(ws)
         got = drain_until(ws, {"conversation.item.input_audio_transcription.completed",
                                "input_audio_buffer.committed"})
-        errors = [e for e in got if e["type"] == "error"]
-        assert any(e.get("code") == "verifier_error" for e in errors), \
-            "a verifier fault must be explicit, not silent"
+        assert not [e for e in got if e["type"] == "error"], \
+            "a recoverable verifier fault must not send a fatal wire error"
         assert any(e["type"] == "conversation.item.input_audio_transcription.completed"
                    for e in got), "fault must fail OPEN: real audio is not deleted"
+        assert any(e["type"] == "input_audio_buffer.committed" for e in got), \
+            "commit must still ACK after a verifier fault"
         assert len(mock.requests) == 1
 
 

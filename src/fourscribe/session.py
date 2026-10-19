@@ -34,11 +34,14 @@ Admission/backpressure (simple explicit bounds, no scheduler/broker):
   superseded by later revisions); finals/ACK are never silently dropped.
 """
 import asyncio
+import logging
 import secrets
 import time
 
 #: clock seam: patchable in tests without disturbing asyncio's own timers
 monotonic = time.monotonic
+
+logger = logging.getLogger("fscribe")
 
 from . import events
 from .aligner import AlignerUnavailable, AlignmentFault
@@ -220,8 +223,10 @@ class RealtimeSession:
         """Shared pre-decode Silero check on the exact segment PCM.
 
         Never blocks the event loop (vad_pool, single worker + verifier lock).
-        A runtime verifier fault is explicit and fails OPEN: the audio is
-        accepted so a broken verifier can never silently delete real speech.
+        A runtime verifier fault fails OPEN: the audio is accepted so a broken
+        verifier can never silently delete real speech. The fault is recorded
+        server-side (stats/tracer/log) and deliberately NOT sent as a wire
+        ``type:error``: the Loqui client treats every wire error as fatal.
         """
         v = self.verifier
         if v is None or not getattr(v, "enabled", False):
@@ -232,12 +237,13 @@ class RealtimeSession:
                 ok = await loop.run_in_executor(self._vad_pool, v.verify, pcm)
             else:
                 ok = await loop.run_in_executor(None, v.verify, pcm)
-        except Exception as exc:  # noqa: BLE001 - explicit fallback, never silence
+        except Exception as exc:  # noqa: BLE001 - recoverable, never a wire error
             self.stats["verifier_faults"] += 1
+            logger.warning("verifier fault (%s) during %s; continuing without "
+                           "rejection", type(exc).__name__, kind)
             if self.tracer:
                 self.tracer.record("verifier_fault", kind=kind,
                                    err_kind=type(exc).__name__)
-            self.emit(events.error_event("verifier_error", type(exc).__name__))
             return True
         if not ok:
             self.stats["verifier_declines"] += 1
