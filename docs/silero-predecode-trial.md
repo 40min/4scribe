@@ -93,15 +93,16 @@ commit still ACKs (finals-before-ACK preserved).
 - Core suite: **69 passed** (`--ignore` the local-only aligner-cache/diag/trace
   modules per README).
 
-## Rollback (BOTH Silero commits)
+## Rollback (complete to baseline)
 
 ```bash
 git -C /opt/40zen/services/4scribe revert --no-edit \
-  cce6479ebb0549d248b8f40de2ee2fd35d78e913 \
-  584815b32ef6b7f1dfcab25cb2578ec7604d8d6b
+  $(git -C /opt/40zen/services/4scribe rev-list --reverse \
+    4e83595e3bd47ceff9a34a2494534b456e712b32..HEAD)
 sudo systemctl restart fourscribe.service
 ```
 
-Reverting only `cce6479` would reintroduce the fatal wire error; the command
-above removes both the trial and the fault-path fix. For an immediate disable
-without reverting, use `FSCRIBE_SILERO_ENABLED=0` plus a service restart.
+This reverts every Silero/stabilization commit after baseline `4e83595` in
+reverse order. Reverting only `cce6479` is NOT safe: it would reintroduce the
+fatal wire error. For an immediate disable without reverting, use
+`FSCRIBE_SILERO_ENABLED=0` plus a service restart.
