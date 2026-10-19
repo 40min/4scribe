@@ -198,33 +198,64 @@ fi
 [ "$TAG_ID" = "$EXPECTED_IMAGE_ID" ] || fail "persistent tag $IMAGE_TAG does not resolve to the accepted image ID"
 note "image_id=$TAG_ID image_tag=$IMAGE_TAG"
 
-PROBE=$(find "$HF_CACHE/hub" -type f -name config.json -print -quit 2>/dev/null || true)
-[ -n "$PROBE" ] || fail "no aligner config.json found under $HF_CACHE/hub"
+CACHE_REAL=$(readlink -f -- "$HF_CACHE") || fail "cannot canonicalize model cache"
+[ -d "$CACHE_REAL" ] || fail "model cache missing: $HF_CACHE"
+case "$CACHE_REAL" in
+  "$ROOT"/*) ;;
+  *) fail "model cache resolves outside the service root: $CACHE_REAL" ;;
+esac
+
+# Standard Hugging Face snapshots use symlinked config.json -> ../../blobs/...
+# Discover regular files AND symlinks, then resolve and contain the target
+# inside the cache mount. find/stat must not follow a link outside the cache.
+PROBE=$(find "$CACHE_REAL/hub" \( -type f -o -type l \) -name config.json -print -quit 2>/dev/null || true)
+[ -n "$PROBE" ] || fail "no aligner config.json file or symlink found under $CACHE_REAL/hub"
+TARGET=$(readlink -f -- "$PROBE") || fail "aligner config.json is a broken/cyclic symlink: $PROBE"
+[ -f "$TARGET" ] || fail "aligner config.json target is not a regular file: $TARGET"
+case "$TARGET" in
+  "$CACHE_REAL"/*) ;;
+  *) fail "aligner config.json target escapes the model cache: $TARGET" ;;
+esac
+if [ -L "$PROBE" ]; then
+  note "model_config_symlink=$PROBE target=$TARGET"
+else
+  note "model_config_file=$TARGET"
+fi
+
 check_model_path() {
-  local p=$1 gid mode
-  gid=$(stat -c '%g' "$p")
-  mode=$((8#$(stat -c '%a' "$p")))
+  local p=$1 gid perm mode
+  [ -e "$p" ] || fail "model cache path missing: $p"
+  gid=$(stat -Lc '%g' "$p") || fail "cannot stat model cache path: $p"
+  perm=$(stat -Lc '%a' "$p") || fail "cannot stat model cache mode: $p"
+  mode=$((8#$perm))
   [ "$gid" = 1000 ] || fail "model cache path group gid=$gid (expected 1000): $p"
   if [ -d "$p" ]; then
-    [ $((mode & 050)) -eq 050 ] || fail "model cache directory lacks group r-x: $p"
+    (( (mode & 050) == 050 )) || fail "model cache directory lacks group r-x: $p"
   else
-    [ $((mode & 040)) -eq 040 ] || fail "model cache file lacks group read: $p"
+    (( (mode & 040) == 040 )) || fail "model cache file lacks group read: $p"
   fi
 }
-check_model_path "$HF_CACHE"
-PARENT=$(dirname "$PROBE")
-while [ "$PARENT" != "$HF_CACHE" ]; do
-  check_model_path "$PARENT"
-  PARENT=$(dirname "$PARENT")
-done
-check_model_path "$PROBE"
-if command -v setpriv >/dev/null 2>&1; then
-  if setpriv --reuid=10001 --regid=10001 --groups=1000 -- test -r "$PROBE" 2>/dev/null; then
-    note "model_read_probe=pass uid=10001 gid=1000"
-  else
-    note "model_read_probe=unavailable (static gid/mode checks passed)"
+
+check_model_dir_chain() {
+  local p=$1
+  p=$(readlink -f -- "$p") || fail "cannot resolve model cache directory: $1"
+  if [ "$p" != "$CACHE_REAL" ]; then
+    case "$p" in
+      "$CACHE_REAL"/*) ;;
+      *) fail "model cache directory escapes the cache: $p" ;;
+    esac
   fi
-fi
+  while [ "$p" != "$CACHE_REAL" ]; do
+    check_model_path "$p"
+    p=$(dirname "$p")
+  done
+}
+
+check_model_path "$CACHE_REAL"
+check_model_dir_chain "$(dirname "$PROBE")"
+check_model_dir_chain "$(dirname "$TARGET")"
+check_model_path "$TARGET"
+note "model_read_probe=not_authoritative_host_side (container read-only mount was accepted; static target/parent checks passed)"
 
 docker compose -f "$COMPOSE" -p "$PROJECT" config -q >/dev/null 2>&1 || \
   fail "compose config validation failed (no interpolated secret output shown)"

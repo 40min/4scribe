@@ -70,7 +70,11 @@ Prerequisites enforced by the script:
 5. `ROOT` resolves to the canonical service path
    `/opt/40zen/services/4scribe`; other paths are rejected;
 6. aligner cache group `1000` with group read/execute on the path and group read
-   on the probe file;
+   on the probe file; a standard Hugging Face `config.json` symlink
+   (`snapshots/<rev>/config.json -> ../../blobs/<hash>`) is resolved only if the
+   target is a regular file and remains inside the cache mount. Broken links and
+   links escaping the cache fail; target, snapshot and blob parent paths are
+   checked;
 7. Docker enabled at boot (`docker.service` or `docker.socket`);
 8. no established `:8093` connection, and `ss` must be able to decide that;
 9. host unit `fourscribe.service` active and enabled as the rollback baseline;
@@ -168,6 +172,14 @@ verifies `/healthz`. The Tailscale route is unchanged throughout.
   rejected by the static check.
 - A tiny trap-pattern test confirmed one rollback call on `TERM` after arming
   (no recursion) and exit 130 without rollback before arming.
+- A temp Hugging Face fixture test accepted a standard `config.json` symlink and
+  a direct regular file, and rejected broken and cache-escaping symlinks. The
+  real cache probe resolves the accepted snapshot symlink to its blob target and
+  passes the static target/parent checks. Host-side `setpriv` read probing is
+  intentionally not a gate because host parent traversal differs from the
+  container bind view; the read-only container mount was already accepted in the
+  owner trial. No model content was read by these checks.
 - The healthcheck Python expression is syntactically valid.
-- Docker daemon checks, image-ID verification, model permission probe and live
-  cutover/rollback remain **unrun** because `opencode` has no Docker/sudo access.
+- Docker daemon checks, image-ID verification, real container read probe and
+  live cutover/rollback remain **unrun** because `opencode` has no Docker/sudo
+  access.
