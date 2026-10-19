@@ -82,10 +82,17 @@ in-process aligner evidence: bf16 CPU, peak RAM ~2.6 GB per decision doc.
   SIGTERM/uvicorn graceful shutdown must not be described as guaranteeing
   client commit/final ACK.
 - Planned cutover/stop is **idle-only** (no active STT session), exactly like
-  the host unit. Set an explicit container stop grace (for example
-  `--stop-timeout`/`stop_grace_period`) and, if used, an explicit uvicorn
-  `--timeout-graceful-shutdown`; treat both as bounded best-effort unwinding
-  only, not as an ACK/flush contract. No shutdown redesign in this stage.
+  the host unit. The trial script fails closed if `ss` reports an active
+  production 8093 connection, if port 18093 listens, or if the task container
+  name already exists; cleanup removes only the container ID it created. Set an
+  explicit container stop grace (for example `--stop-timeout`/`stop_grace_period`)
+  and, if used, an explicit uvicorn `--timeout-graceful-shutdown`; treat both as
+  bounded best-effort unwinding only, not as an ACK/flush contract. No shutdown
+  redesign in this stage.
+- Measurements: `cgroup memory.peak` is read inside the trial when readable;
+  otherwise peak is explicitly unmeasured and a posthoc `docker stats`
+  snapshot is labelled as such. Torch threads reported via `docker exec` are
+  a default-probe (new process), not the running service's effective count.
 
 ## 6. Network, ports, trial and cutover gate
 

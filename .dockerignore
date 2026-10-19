@@ -6,3 +6,8 @@
 !src/**
 !tests
 !tests/**
+# Generated caches must never enter the build context, even under src/tests.
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
