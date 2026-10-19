@@ -1,0 +1,8 @@
+# 4scribe container build context (deny-all allowlist).
+# Everything not re-included below is excluded from the image/context.
+*
+!requirements-container.txt
+!src
+!src/**
+!tests
+!tests/**

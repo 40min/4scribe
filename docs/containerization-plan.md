@@ -27,7 +27,9 @@ silero-vad 6.2.3. Aligner cache:
 - **Pins:** fastapi, uvicorn, httpx, websockets, numpy, packaging,
   transformers, qwen-asr, silero-vad==6.2.3 (wheel SHA256 `7b7f5436…`),
   `torch==2.14.1+cpu` from the CPU index. Do not pin transient host-only
-  packages the app does not import.
+  packages the app does not import. `qwen-asr==0.0.6` is installed
+  `--no-deps` to mirror the accepted host venv and avoid pulling the optional
+  gradio/Flask UI tree; its real runtime deps are pinned explicitly.
 - **Entrypoint:** `python -m uvicorn fourscribe.app:create_app --factory
   --app-dir src --host 127.0.0.1 --port <port>`; the port is passed explicitly
   per launch (see §6).
@@ -45,6 +47,9 @@ silero-vad 6.2.3. Aligner cache:
   `--env-file` from an owner-controlled path); never in the image or plan.
 - Explicit non-root uid/gid matching the mounted cache; `--read-only` root
   filesystem plus a small writable `tmpfs` for `/tmp`; no-new-privileges.
+  Because the service root is group-restricted on the host, the trial runs as
+  the image uid with `--group-add` for the read-only cache's group (default
+  `1000`); this grants read-only mount access, not host write.
 
 ## 4. CPU, memory and threads
 
