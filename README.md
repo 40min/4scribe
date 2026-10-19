@@ -60,6 +60,11 @@ partials and finals; rejection emits no text and no aligner call, but a commit
 still ACKs and the clock continues. If enabled and the verifier cannot load,
 startup fails explicitly. See `docs/silero-predecode-trial.md`.
 
+A completed ASR response with empty/whitespace content (or the official
+`language None<asr_text>` no-speech marker) is valid no-transcription, not an
+error: no final, no aligner call, commit still ACKs. Missing/malformed fields,
+`done=false`, and HTTP/transport failures remain errors.
+
 ## Tests
 
 Core mock tests need no model server or downloads:

@@ -7,6 +7,9 @@ images=[b64 wav])] (+ optional trailing assistant prefill
 `language <Lang><asr_text>...` on unforced paths; the forced path yields the
 continuation only. Blocking HTTP work happens in the caller thread (the service
 runs this through a bounded thread pool, never on the event loop).
+A completed response with empty/whitespace content is a valid no-transcription
+result (returned as empty text), not a decode error; malformed/truncated
+responses and HTTP/transport failures stay errors.
 """
 import json
 import time
@@ -67,10 +70,22 @@ class OllamaChat:
                                headers={"Content-Type": "application/json"})
         resp.raise_for_status()
         payload = resp.json()
-        content = (payload.get("message") or {}).get("content") or ""
         wall = time.perf_counter() - t0
-        if payload.get("done") is False or not content:
-            raise OllamaDecodeError("empty/undone ollama response")
+        # Valid-response contract. A completed (done=true) response whose
+        # message.content is a string is valid even when it is empty or
+        # whitespace: that is a normal "no transcription" result, not an
+        # error. Missing/malformed fields and truncated (done=false)
+        # responses remain explicit errors, as do HTTP/transport failures.
+        if not isinstance(payload, dict):
+            raise OllamaDecodeError("malformed ollama response: not an object")
+        if payload.get("done") is not True:
+            raise OllamaDecodeError("incomplete ollama response (done != true)")
+        message = payload.get("message")
+        if not isinstance(message, dict):
+            raise OllamaDecodeError("malformed ollama response: missing message")
+        if not isinstance(message.get("content"), str):
+            raise OllamaDecodeError("malformed ollama response: content not a string")
+        content = message["content"]
         return DecodeResult(text=split_asr(content),
                             prompt_tok=payload.get("prompt_eval_count"),
                             eval_tok=payload.get("eval_count"),
