@@ -64,13 +64,18 @@ Prerequisites enforced by the script:
 2. accepted image ID present locally (the script does not pull or rebuild);
 3. persistent tag absent or already resolving to that exact ID;
 4. runtime source/build inputs identical to the accepted commit and clean;
-5. aligner cache group `1000` with group read/execute on the path and group read
+   repository ownership is handled only by a task-local
+   `git -c safe.directory="$ROOT"` wrapper (no global Git config, no wildcard
+   trust);
+5. `ROOT` resolves to the canonical service path
+   `/opt/40zen/services/4scribe`; other paths are rejected;
+6. aligner cache group `1000` with group read/execute on the path and group read
    on the probe file;
-6. Docker enabled at boot (`docker.service` or `docker.socket`);
-7. no established `:8093` connection, and `ss` must be able to decide that;
-8. host unit `fourscribe.service` active and enabled as the rollback baseline;
-9. any pre-existing `fourscribe-container` carries the 4scribe ownership label
-   and accepted image ID; foreign containers are never touched.
+7. Docker enabled at boot (`docker.service` or `docker.socket`);
+8. no established `:8093` connection, and `ss` must be able to decide that;
+9. host unit `fourscribe.service` active and enabled as the rollback baseline;
+10. any pre-existing `fourscribe-container` carries the 4scribe ownership label
+    and accepted image ID; foreign containers are never touched.
 
 ## Switch semantics
 
@@ -112,6 +117,14 @@ Any failure after the host unit is stopped invokes the script's rollback:
 The container is stopped, not removed, so logs remain available. The image tag,
 host venv, model cache and token file are preserved.
 
+After the switch is armed, `SIGINT`/`SIGTERM` route once through the same
+rollback; the signal traps are disarmed first, so a second signal cannot
+recurse. Before the switch is armed, a signal exits without changing anything.
+During rollback itself, signals are disarmed and a further signal may interrupt
+it; re-running `cutover-container.sh` (which validates the baseline) or the
+manual rollback command is the recovery path. No further shutdown architecture is
+introduced.
+
 ## Manual rollback
 
 Run as root/owner, idle-only:
@@ -148,6 +161,13 @@ verifies `/healthz`. The Tailscale route is unchanged throughout.
 - Compose YAML parses and shows the expected image, host network, user, mounts,
   read-only/tmpfs, restart policy, stop grace, labels and healthcheck.
 - Both scripts fail closed with the expected message when run without root.
+- All repository inspections in the cutover script use the task-local
+  `repo_git()` wrapper (`git -c safe.directory="$ROOT" -C "$ROOT"`); there are no
+  direct `git -C` calls and no global Git ownership configuration. The service
+  root must canonicalize to `/opt/40zen/services/4scribe`; a `/tmp` path is
+  rejected by the static check.
+- A tiny trap-pattern test confirmed one rollback call on `TERM` after arming
+  (no recursion) and exit 130 without rollback before arming.
 - The healthcheck Python expression is syntactically valid.
 - Docker daemon checks, image-ID verification, model permission probe and live
   cutover/rollback remain **unrun** because `opencode` has no Docker/sudo access.

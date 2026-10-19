@@ -16,8 +16,8 @@
 # fails closed if that cannot be determined.
 set -euo pipefail
 
-ROOT=${ROOT:-/opt/40zen/services/4scribe}
-COMPOSE="$ROOT/deployment/compose.yaml"
+EXPECTED_ROOT=/opt/40zen/services/4scribe
+ROOT=${ROOT:-$EXPECTED_ROOT}
 PROJECT=fourscribe
 SERVICE=fourscribe
 CNAME=fourscribe-container
@@ -27,18 +27,28 @@ BASE_COMMIT=948073011112e3cd164ca8269388bc709e1cfa69
 HOST_UNIT=fourscribe.service
 PORT=8093
 SECRET_FILE=/opt/40zen/secrets/4scribe.env
-HF_CACHE="$ROOT/model-cache/hf"
 GRACE=20
-PYBIN="$ROOT/.venv/bin/python"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 note() { echo "$*"; }
 
 [ "$(id -u)" -eq 0 ] || fail "run as root/owner (systemd + root-owned env file required)"
 
-for cmd in docker curl ss git systemctl stat find; do
+for cmd in docker curl ss git systemctl stat find readlink; do
   command -v "$cmd" >/dev/null 2>&1 || fail "$cmd not found"
 done
+[ -d "$ROOT" ] || fail "service root missing: $ROOT"
+ROOT=$(readlink -f -- "$ROOT") || fail "cannot canonicalize ROOT"
+CANONICAL_EXPECTED=$(readlink -f -- "$EXPECTED_ROOT") || fail "cannot canonicalize expected service root"
+[ "$ROOT" = "$CANONICAL_EXPECTED" ] || \
+  fail "ROOT must resolve to the canonical service path $CANONICAL_EXPECTED (got $ROOT)"
+COMPOSE="$ROOT/deployment/compose.yaml"
+HF_CACHE="$ROOT/model-cache/hf"
+PYBIN="$ROOT/.venv/bin/python"
+
+# Task-local ownership exception only: no global git config, no wildcard trust.
+repo_git() { git -c safe.directory="$ROOT" -C "$ROOT" "$@"; }
+
 [ -x "$PYBIN" ] || PYBIN=$(command -v python3 || true)
 [ -n "$PYBIN" ] || fail "no python3 for bounded health parsing"
 docker info -f '{{.ServerVersion}}' >/dev/null 2>&1 || fail "docker daemon not accessible"
@@ -95,6 +105,7 @@ rollback() {
   [ "$ROLLBACK_RUNNING" = 0 ] || exit 1
   ROLLBACK_RUNNING=1
   trap - ERR
+  trap - INT TERM
   echo "ROLLBACK: $why" >&2
   ids=$(docker compose -f "$COMPOSE" -p "$PROJECT" ps -a -q 2>/dev/null || true)
   if [ -n "${CID:-}" ]; then
@@ -149,19 +160,32 @@ on_error() {
     exit "$rc"
   fi
 }
+
+# After the switch is armed, INT/TERM route once through the same bounded
+# rollback. The traps are disarmed first so a second signal cannot recurse.
+on_signal() {
+  local sig=$1
+  trap - INT TERM ERR
+  if [ "$ROLLBACK_ARMED" = 1 ]; then
+    rollback "interrupted by SIG$sig"
+  fi
+  exit 130
+}
 trap on_error ERR
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
 
 note "== preflight: git/image/config/permissions =="
-git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "not a git repository: $ROOT"
-git -C "$ROOT" cat-file -e "$BASE_COMMIT^{commit}" 2>/dev/null || fail "accepted base commit missing"
-git -C "$ROOT" merge-base --is-ancestor "$BASE_COMMIT" HEAD || fail "accepted base commit is not an ancestor of HEAD"
-if ! git -C "$ROOT" diff --quiet "$BASE_COMMIT" HEAD -- src Dockerfile requirements-container.txt .dockerignore; then
+repo_git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "not a git repository: $ROOT"
+repo_git cat-file -e "$BASE_COMMIT^{commit}" 2>/dev/null || fail "accepted base commit missing"
+repo_git merge-base --is-ancestor "$BASE_COMMIT" HEAD || fail "accepted base commit is not an ancestor of HEAD"
+if ! repo_git diff --quiet "$BASE_COMMIT" HEAD -- src Dockerfile requirements-container.txt .dockerignore; then
   fail "runtime/build inputs differ from accepted commit $BASE_COMMIT"
 fi
-if [ -n "$(git -C "$ROOT" status --porcelain --untracked-files=no -- src Dockerfile requirements-container.txt .dockerignore)" ]; then
+if [ -n "$(repo_git status --porcelain --untracked-files=no -- src Dockerfile requirements-container.txt .dockerignore)" ]; then
   fail "runtime/build inputs have uncommitted changes"
 fi
-note "git_head=$(git -C "$ROOT" rev-parse --short HEAD) base_commit=${BASE_COMMIT:0:7}"
+note "git_head=$(repo_git rev-parse --short HEAD) base_commit=${BASE_COMMIT:0:7}"
 
 docker image inspect "$EXPECTED_IMAGE_ID" >/dev/null 2>&1 || \
   fail "accepted image ID is absent locally; do not rebuild blindly or upload to a registry"
@@ -276,7 +300,7 @@ case "$(systemctl is-enabled "$HOST_UNIT" 2>/dev/null || true)" in
 esac
 
 ROLLBACK_ARMED=0
-trap - ERR
+trap - ERR INT TERM
 note "cutover_result=active"
 note "container_id=$CID image_id=$IMG"
 note "healthz=$(cat "$TMP/healthz.json")"

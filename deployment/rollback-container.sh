@@ -8,26 +8,34 @@
 #
 # SIGTERM is bounded best-effort unwinding, NOT a final-ACK guarantee. This
 # script refuses if any 8093 session is established and fails closed if that
-# state cannot be determined.
+# state cannot be determined. Interruption is safe to retry: the script is
+# idempotent and re-running it completes the host-unit restore.
 set -euo pipefail
 
-ROOT=${ROOT:-/opt/40zen/services/4scribe}
-COMPOSE="$ROOT/deployment/compose.yaml"
+EXPECTED_ROOT=/opt/40zen/services/4scribe
+ROOT=${ROOT:-$EXPECTED_ROOT}
 PROJECT=fourscribe
 CNAME=fourscribe-container
 HOST_UNIT=fourscribe.service
 PORT=8093
 GRACE=20
 SECRET_FILE=/opt/40zen/secrets/4scribe.env
-HF_CACHE="$ROOT/model-cache/hf"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 note() { echo "$*"; }
 
 [ "$(id -u)" -eq 0 ] || fail "run as root/owner (systemd required)"
-for cmd in docker curl ss systemctl; do
+for cmd in docker curl ss systemctl readlink; do
   command -v "$cmd" >/dev/null 2>&1 || fail "$cmd not found"
 done
+[ -d "$ROOT" ] || fail "service root missing: $ROOT"
+ROOT=$(readlink -f -- "$ROOT") || fail "cannot canonicalize ROOT"
+CANONICAL_EXPECTED=$(readlink -f -- "$EXPECTED_ROOT") || fail "cannot canonicalize expected service root"
+[ "$ROOT" = "$CANONICAL_EXPECTED" ] || \
+  fail "ROOT must resolve to the canonical service path $CANONICAL_EXPECTED (got $ROOT)"
+COMPOSE="$ROOT/deployment/compose.yaml"
+HF_CACHE="$ROOT/model-cache/hf"
+
 docker info -f '{{.ServerVersion}}' >/dev/null 2>&1 || fail "docker daemon not accessible"
 [ -f "$SECRET_FILE" ] || fail "root-owned secret env file missing (not read/printed)"
 [ -d "$HF_CACHE" ] || fail "model cache missing: $HF_CACHE"
