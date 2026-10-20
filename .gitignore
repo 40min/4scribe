@@ -13,8 +13,7 @@
 /deployment/*
 !/deployment/smoke_wss.py
 !/deployment/compose.yaml
-!/deployment/cutover-container.sh
-!/deployment/rollback-container.sh
+!/deployment/retire-host-runtime.sh
 !/deployment/diagnostics/
 !/deployment/replay/
 /deployment/diagnostics/*

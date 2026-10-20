@@ -1,11 +1,6 @@
-# 4scribe permanent container runtime (PREPARED; not active until owner cutover).
-# Ollama stays external on the host loopback. This file intentionally contains
-# no token, model weights or host-specific secret values: the Bearer token is
-# supplied only through the root-owned env file below.
-#
-# The image tag is a persistent handle created from the accepted immutable image
-# ID by deployment/cutover-container.sh. That script verifies the ID again before
-# cutover and after container start; the tag alone is never treated as proof.
+# Accepted active 4scribe container runtime. See docs/container-permanent.md.
+# The local tag must resolve to the accepted immutable image ID documented there.
+# External root-owned env file and read-only model cache remain required.
 name: fourscribe
 
 services:

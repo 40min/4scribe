@@ -1,10 +1,13 @@
+> Historical migration/trial record. Superseded operational instructions: see
+> `container-permanent.md`. Container accepted and active as of 2026-10-20;
+> host rollback is retired. References below describe the historical migration.
+
 # 4scribe isolated container trial (owner-runnable)
 
-Status: trial **ACCEPTED by the owner** on the immutable image below. The
-`opencode` agent still cannot access Docker/sudo, so it did not build, run or
-cut over anything. Production remains on the host unit at `127.0.0.1:8093`.
-Permanent Compose/cutover artifacts are prepared but **NOT ACTIVE**; see
-`docs/container-permanent.md`.
+Status: historical trial record. The trial was **ACCEPTED by the owner** on the
+immutable image below. The accepted container is now active; the host unit is
+inactive/disabled and host rollback is retired. This document is not current
+operations; see `docs/container-permanent.md`.
 
 ## Accepted trial image
 
@@ -19,7 +22,7 @@ Permanent Compose/cutover artifacts are prepared but **NOT ACTIVE**; see
 | Trial port | `127.0.0.1:18093`, removed after trial; 8093 was not switched |
 
 The permanent deployment uses the immutable ID above, not the mutable
-`4scribe-trial:local` tag. Run `deployment/cutover-container.sh` (as root) to
+`4scribe-trial:local` tag. Run the retired migration cutover tool (as root) to
 create/reuse the persistent local tag `4scribe:accepted-2026-10-19`, verify its
 ID, and switch. Do not remove or retag the accepted image before that.
 
@@ -33,9 +36,9 @@ ID, and switch. Do not remove or retag the accepted image before that.
 | `deployment/fetch_trial_fixtures.py` | checked-in fetcher for three pinned PUBLIC CC BY 4.0 clips (~2 MB: short RU, long 11.35 s RU, EN), hash-verified, PCM16 16 kHz |
 | `deployment/container-trial.sh` | fail-closed preflight, build, in-image hermetic tests, isolated 18093 host-network trial, RU+EN smokes, selected measurements, owned-only cleanup |
 | `deployment/compose.yaml` | permanent host-network runtime for the accepted image; non-root, read-only root, tmpfs, model cache `:ro`, external env file, `unless-stopped` |
-| `deployment/cutover-container.sh` | owner/root idle-only switch with image-ID verification, host-unit disable, bounded health/verifier check and automatic rollback |
-| `deployment/rollback-container.sh` | owner/root idle-only rollback to the existing host unit; preserves container logs, image, venv, models and token |
-| `docs/container-permanent.md` | permanent prerequisites, switch/rollback semantics and readiness honesty |
+| the retired migration cutover tool | owner/root idle-only switch with image-ID verification, host-unit disable, bounded health/verifier check and automatic rollback |
+| the retired host rollback tool | owner/root idle-only rollback to the existing host unit; preserves container logs, image, venv, models and token |
+| `docs/container-permanent.md` | current container operations and host-retirement status |
 
 The image bakes no aligner weights, no token and no host/tailnet identifier.
 The 1.8 GB aligner cache is a read-only bind mount; the Silero JIT is part of
@@ -114,6 +117,6 @@ the trap, the owner can remove the exact named trial container/id. **Do not
 remove the accepted image by ID.** The trial tag `4scribe-trial:local` is
 disposable only after the persistent tag `4scribe:accepted-2026-10-19` exists and
 resolves to the accepted ID; removing the trial tag earlier can make the accepted
-image unavailable locally. Cutover to 8093 is a separate owner gate and is not
-authorized here; use `docs/container-permanent.md` for the prepared cutover and
-rollback commands.
+image unavailable locally. Cutover to 8093 was a separate owner gate and is not
+authorized here; use `docs/container-permanent.md` for current container
+operations.

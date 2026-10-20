@@ -12,9 +12,9 @@ release. Latency and noise-triggered hallucinations remain under investigation.
 - `src/fourscribe`: service, bounded queues, endpointing, ASR, alignment and optional sanitized lifecycle tracing.
 - `tests`: synthetic/mock protocol and regression tests; literal tokens are dummy credentials.
 - `deployment/smoke_wss.py`: authenticated streaming smoke test.
-- `deployment/compose.yaml`: permanent container runtime (prepared, not active).
-- `deployment/cutover-container.sh`, `deployment/rollback-container.sh`: owner-only idle cutover/rollback.
-- `docs/container-permanent.md`: container prerequisites, switch and rollback semantics.
+- `deployment/compose.yaml`: accepted active container runtime.
+- `deployment/retire-host-runtime.sh`: guarded owner/root removal of the obsolete host runtime.
+- `docs/container-permanent.md`: current container operations and host retirement status.
 - `deployment/diagnostics`: standalone synthetic lifecycle diagnostic harness.
 - `deployment/replay/streaming_replay.py`: original-paced saved-audio replay utility.
 - `docs/pip-freeze-2026-10-16-completion.txt`: historical environment inventory, not a portable lockfile.
@@ -25,21 +25,15 @@ Local research artifacts remain preserved outside Git.
 
 ## Runtime
 
-The existing environment uses Python 3.12, FastAPI, Uvicorn, httpx, websockets,
+The accepted container uses Python 3.14.4, FastAPI, Uvicorn, httpx, websockets,
 CPU torch, transformers and qwen-asr. Provision dependencies and models separately;
 there is no automatic model download at service startup. CPU torch requires its
 appropriate package index. The tested Ollama package is the third-party Q8_0
 `frozenlab/qwen3-asr:1.7b`. The aligner is `Qwen/Qwen3-ForcedAligner-0.6B`, loaded
 from a pre-provisioned local Hugging Face cache. Model licenses apply separately.
 
-With dependencies and models provisioned:
-
-```sh
-# Securely set FSCRIBE_TOKEN in the process environment first.
-# Set FSCRIBE_ALIGNER_HF_HOME to the HF cache containing the aligner.
-python -m uvicorn fourscribe.app:create_app --factory --app-dir src \
-  --host 127.0.0.1 --port 8093
-```
+Installation and maintenance use the container image and Compose definition; see
+`docs/container-permanent.md`. The host virtualenv and systemd service are retired.
 
 Environment-driven startup rejects the dummy `test-token` default. TLS/ingress
 and service management are deployment responsibilities. WebSocket paths:
@@ -56,16 +50,15 @@ Configuration lives in `src/fourscribe/config.py`, including
 Some historical default paths reference the original experimental environment.
 A host-specific pipeline diagnostic and its dependent test remain local-only.
 
-## Container deployment (prepared, not active)
+## Container deployment (active)
 
-The accepted image has a permanent Compose definition at
-`deployment/compose.yaml` and owner cutover/rollback scripts. The production
-listener is still the existing host service; the container is **not active**.
-The image tag is only a handle: the owner script verifies the accepted immutable
-image ID before and after cutover. The token stays in the root-owned external
-env file, the aligner cache is mounted read-only, and the Tailscale route is
-unchanged. See `docs/container-permanent.md` for prerequisites, exact owner
-command, health scope and rollback semantics.
+`fourscribe-container` serves `127.0.0.1:8093` using the accepted image
+`sha256:7708a83bff51186ec273612b63fe6e6575fb46971e49e74a5c226610791e6517`
+(tag `4scribe:accepted-2026-10-19`). Owner live acceptance was confirmed on
+2026-10-20. The host unit is inactive/disabled; its files and obsolete virtualenv
+await guarded owner/root deletion. Host rollback is retired; future fixes use
+containers. The root-owned external env file, read-only aligner cache, external
+Ollama and Tailscale route remain in use. See `docs/container-permanent.md`.
 
 Pre-decode speech verification uses pinned `silero-vad==6.2.3` (MIT, bundled
 JIT model). Env-driven startup enables it by default; disable with
@@ -84,7 +77,7 @@ error: no final, no aligner call, commit still ACKs. Missing/malformed fields,
 Core mock tests need no model server or downloads:
 
 ```sh
-python -m pytest tests -q -p no:cacheprovider \
+docker exec fourscribe-container python -m pytest tests -q -p no:cacheprovider \
   --ignore=tests/test_aligner_cache.py \
   --ignore=tests/test_diag_units.py \
   --ignore=tests/test_trace_replay.py

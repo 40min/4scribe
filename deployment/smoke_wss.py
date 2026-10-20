@@ -8,8 +8,8 @@ skip TLS. Loopback preflight uses a ws:// URL so no TLS claim is made there.
 Public fixtures only, no cloud calls, no private recordings. Never prints the
 token (token is read in-process from the file; not a CLI value).
 
-Usage:
-    .venv/bin/python deployment/smoke_wss.py \
+Usage (inside a container with public fixtures and token file mounted read-only):
+    python deployment/smoke_wss.py \
         --url ws://127.0.0.1:8093/4scribe/v1/audio/transcriptions/realtime \
         --token-file /opt/40zen/secrets/4scribe.env \
         --fixture /tmp/4scribe-backend-eval/ru_short.wav --fixture ru \

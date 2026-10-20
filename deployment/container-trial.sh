@@ -17,7 +17,14 @@ PORT=${TRIAL_PORT:-18093}
 KEEP_ALIVE=${TRIAL_KEEP_ALIVE_S:-60}
 MODEL=${FSCRIBE_MODEL:-frozenlab/qwen3-asr:1.7b}
 DISK_BUDGET_GB=${TRIAL_DISK_BUDGET_GB:-6}
-PY="$ROOT/.venv/bin/python"
+PY=python3
+command -v "$PY" >/dev/null || { echo "python3 required" >&2; exit 1; }
+# Host Python runs stdlib helpers only; image supplies smoke dependencies.
+smoke() {
+  docker run --rm --network=host --read-only --user "$(id -u):$(id -g)" \
+    --volume "$ROOT:/runner:ro" --volume "$TRIAL_DIR:$TRIAL_DIR:ro" \
+    --entrypoint python "$IMAGE" /runner/deployment/smoke_wss.py "$@"
+}
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -143,12 +150,12 @@ echo "== two-stream authenticated loopback WS smoke (RU + EN) =="
 RU_RC=1
 EN_RC=1
 set +e
-"$PY" "$ROOT/deployment/smoke_wss.py" \
+smoke \
   --url "ws://127.0.0.1:$PORT/v1/audio/transcriptions/realtime" \
   --token-file "$TOKEN_FILE" --fixture "$FIX/ru_long_01.wav" --fixture ru \
   > "$TRIAL_DIR/smoke_ru.log" 2>&1 &
 RU_PID=$!
-"$PY" "$ROOT/deployment/smoke_wss.py" \
+smoke \
   --url "ws://127.0.0.1:$PORT/v1/audio/transcriptions/realtime" \
   --token-file "$TOKEN_FILE" --fixture "$FIX/en_normal_01.wav" --fixture en \
   --allow-no-deltas \
