@@ -17,13 +17,24 @@ PORT=${TRIAL_PORT:-18093}
 KEEP_ALIVE=${TRIAL_KEEP_ALIVE_S:-60}
 MODEL=${FSCRIBE_MODEL:-frozenlab/qwen3-asr:1.7b}
 DISK_BUDGET_GB=${TRIAL_DISK_BUDGET_GB:-6}
+FETCH_IMAGE_ID=sha256:7708a83bff51186ec273612b63fe6e6575fb46971e49e74a5c226610791e6517
 PY=python3
 command -v "$PY" >/dev/null || { echo "python3 required" >&2; exit 1; }
-# Host Python runs stdlib helpers only; image supplies smoke dependencies.
+# Host Python runs stdlib-only helpers; fixture fetch and smoke run in the
+# accepted image so no host numpy/soundfile/websocket packages are required.
+fetch_fixtures() {
+  docker run --rm --network=host --read-only \
+    --user "$(id -u):$(id -g)" \
+    --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+    --volume "$ROOT/deployment/fetch_trial_fixtures.py:/runner/fetch_trial_fixtures.py:ro" \
+    --volume "$FIX:$FIX:rw" \
+    --entrypoint python "$FETCH_IMAGE_ID" /runner/fetch_trial_fixtures.py "$@"
+}
 smoke() {
   docker run --rm --network=host --read-only --user "$(id -u):$(id -g)" \
-    --volume "$ROOT:/runner:ro" --volume "$TRIAL_DIR:$TRIAL_DIR:ro" \
-    --entrypoint python "$IMAGE" /runner/deployment/smoke_wss.py "$@"
+    --volume "$ROOT/deployment/smoke_wss.py:/runner/smoke_wss.py:ro" \
+    --volume "$TRIAL_DIR:$TRIAL_DIR:ro" \
+    --entrypoint python "$IMAGE" /runner/smoke_wss.py "$@"
 }
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -77,7 +88,12 @@ cleanup() {
 trap cleanup EXIT
 
 # --- 3. reproducible public fixtures inside own scratch -------------------
-"$PY" "$ROOT/deployment/fetch_trial_fixtures.py" --out "$FIX"
+# Use the accepted immutable image before the trial build so the host needs no
+# numpy/soundfile. Only the exact fetcher file (RO) and scratch dir (RW) are
+# mounted; the protected token file is not mounted.
+docker image inspect "$FETCH_IMAGE_ID" >/dev/null 2>&1 || \
+  fail "accepted image $FETCH_IMAGE_ID unavailable; cannot fetch public fixtures without host packages"
+fetch_fixtures --out "$FIX"
 
 # --- 4. initial Ollama /api/ps metadata for THIS ASR only -----------------
 PS_KNOWN=0

@@ -33,7 +33,7 @@ ID, and switch. Do not remove or retag the accepted image before that.
 | `Dockerfile` | one app+Silero+aligner image; external Ollama; pinned `python:3.14.4-slim` digest and `torch==2.14.1+cpu`; `qwen-asr` installed `--no-deps` like the host venv |
 | `.dockerignore` | deny-all allowlist: `requirements-container.txt`, `src/`, `tests/`; `**/__pycache__/` and `**/*.pyc` excluded even under src/tests |
 | `requirements-container.txt` | direct + critical transitive pins from the accepted host inventory |
-| `deployment/fetch_trial_fixtures.py` | checked-in fetcher for three pinned PUBLIC CC BY 4.0 clips (~2 MB: short RU, long 11.35 s RU, EN), hash-verified, PCM16 16 kHz |
+| `deployment/fetch_trial_fixtures.py` | checked-in fetcher for three pinned PUBLIC CC BY 4.0 clips (~2 MB: short RU, long 11.35 s RU, EN), hash-verified, PCM16 16 kHz; runs inside the accepted immutable image with only the fetcher and scratch directory mounted |
 | `deployment/container-trial.sh` | fail-closed preflight, build, in-image hermetic tests, isolated 18093 host-network trial, RU+EN smokes, selected measurements, owned-only cleanup |
 | `deployment/compose.yaml` | permanent host-network runtime for the accepted image; non-root, read-only root, tmpfs, model cache `:ro`, external env file, `unless-stopped` |
 | the retired migration cutover tool | owner/root idle-only switch with image-ID verification, host-unit disable, bounded health/verifier check and automatic rollback |

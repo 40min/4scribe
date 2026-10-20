@@ -31,8 +31,9 @@ changed code and owner-accepted deployment; never install a replacement host
 virtualenv. Retained public smoke and replay utilities need their Python
 dependencies in a container and explicit read-only fixture mounts; owner
 recordings are not bundled. `container-trial.sh` retains its isolated public
-trial workflow using host Python stdlib helpers and in-image smoke dependencies;
-it is not part of normal production startup.
+trial workflow using host Python stdlib helpers; fixture fetch and smoke run in
+the accepted image, not a host virtualenv. It is not part of normal production
+startup.
 
 Compose operations use `deployment/compose.yaml` and require access to the
 root-owned env file. Service recreation/restart is a separate deployment action;
@@ -44,9 +45,9 @@ The obsolete `fourscribe.service` is inactive and disabled, with no effective
 drop-ins. Its `.venv` is not a container mount. The virtualenv (1,699,748,165
 apparent bytes, about 1.7 GiB disk usage) and root-owned unit/empty drop-in directory
 remain on disk pending owner credentials. No disk space has yet been reclaimed.
-Host rollback is permanently retired; the migration cutover/rollback tools were
-removed. The ignored local unit template is not runtime and remains outside Git.
-Historical trial/plan records remain.
+Host rollback is permanently retired; the migration cutover/rollback tools and
+the obsolete local unit template were removed. Historical trial/plan records
+remain.
 
 After reviewing the script, the owner can run:
 
