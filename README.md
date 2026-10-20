@@ -14,7 +14,9 @@ release. Latency and noise-triggered hallucinations remain under investigation.
 - `deployment/smoke_wss.py`: authenticated streaming smoke test.
 - `deployment/compose.yaml`: accepted active container runtime.
 - `deployment/retire-host-runtime.sh`: guarded owner/root removal of the obsolete host runtime.
+- `deployment/cleanup-residual-scratch.sh`: exact-path owner/root cleanup of residual historical scratch.
 - `docs/container-permanent.md`: current container operations and host retirement status.
+- `docs/backend-eval-manifest-2026-10-16.md`: preserved public backend-eval versions/fixture provenance.
 - `deployment/diagnostics`: standalone synthetic lifecycle diagnostic harness.
 - `deployment/replay/streaming_replay.py`: original-paced saved-audio replay utility.
 - `docs/pip-freeze-2026-10-16-completion.txt`: historical environment inventory, not a portable lockfile.
@@ -55,10 +57,11 @@ A host-specific pipeline diagnostic and its dependent test remain local-only.
 `fourscribe-container` serves `127.0.0.1:8093` using the accepted image
 `sha256:7708a83bff51186ec273612b63fe6e6575fb46971e49e74a5c226610791e6517`
 (tag `4scribe:accepted-2026-10-19`). Owner live acceptance was confirmed on
-2026-10-20. The host unit is inactive/disabled; its files and obsolete virtualenv
-await guarded owner/root deletion. Host rollback is retired; future fixes use
-containers. The root-owned external env file, read-only aligner cache, external
-Ollama and Tailscale route remain in use. See `docs/container-permanent.md`.
+2026-10-20. The host unit and obsolete virtualenv were removed; residual
+historical scratch cleanup is pending an exact-path owner/root script. Host
+rollback is retired; future fixes use containers. The root-owned external env
+file, read-only aligner cache, external Ollama and Tailscale route remain in use.
+See `docs/container-permanent.md`.
 
 Pre-decode speech verification uses pinned `silero-vad==6.2.3` (MIT, bundled
 JIT model). Env-driven startup enables it by default; disable with

@@ -11,8 +11,8 @@ Its sole bind mount is `/opt/40zen/services/4scribe/model-cache/hf` → `/models
 `/opt/40zen/secrets/4scribe.env` (root-owned 0600; never print/copy it).
 Ollama remains external at loopback 11434 using `frozenlab/qwen3-asr:1.7b`.
 UID/GID are 10001:10001 with supplementary group 1000; networking is host mode.
-Docker restart policy is `unless-stopped`. No production change was made during
-host retirement preparation.
+Docker restart policy is `unless-stopped`. No production STT/container change
+was made during host retirement or residual-scratch preparation.
 
 ## Checks and future maintenance
 
@@ -39,27 +39,28 @@ Compose operations use `deployment/compose.yaml` and require access to the
 root-owned env file. Service recreation/restart is a separate deployment action;
 none is needed for this cleanup. Do not dump Docker environment/secret values.
 
-## Permanent host retirement: root action pending
+## Host retirement: complete
 
-The obsolete `fourscribe.service` is inactive and disabled, with no effective
-drop-ins. Its `.venv` is not a container mount. The virtualenv (1,699,748,165
-apparent bytes, about 1.7 GiB disk usage) and root-owned unit/empty drop-in directory
-remain on disk pending owner credentials. No disk space has yet been reclaimed.
-Host rollback is permanently retired; the migration cutover/rollback tools and
-the obsolete local unit template were removed. Historical trial/plan records
-remain.
+The obsolete `fourscribe.service` and its empty drop-in directory have been
+removed, and the legacy `.venv` (pre-delete inventory 1,699,748,165 apparent
+bytes) is absent. Host rollback is permanently retired; the migration
+cutover/rollback tools and the obsolete local unit template were removed.
+Historical trial/plan records remain. The accepted container remains the only
+runtime; no model, image, secret or repo content was removed by host retirement.
 
-After reviewing the script, the owner can run:
+## Residual scratch cleanup (owner/root, pending)
+
+The reviewed exact-path cleanup for the remaining old evaluation/session scratch
+is `deployment/cleanup-residual-scratch.sh`. It first verifies the accepted
+healthy container and its sole read-only model-cache mount, rejects symlinks,
+mounts and live process references, then removes only the named historical
+scratch directories. It does not touch the container, image, model cache,
+secrets, repo, Loqui reference, private owner replay copies or the unknown
+parakeet test file.
 
 ```sh
-sudo /opt/40zen/services/4scribe/deployment/retire-host-runtime.sh
+sudo /opt/40zen/services/4scribe/deployment/cleanup-residual-scratch.sh
 ```
 
-The script checks the accepted healthy container and verifier, inactive/disabled
-legacy unit, exact paths, no symlink traversal, no unexpected drop-ins/mounts and
-no live process mapping the virtualenv before deleting only the obsolete unit,
-empty drop-in directory and `.venv`. It reloads systemd and rechecks the unchanged
-container. No host rollback, archives, model deletion, container restart or prune.
-After success record the actual reclaimed allocation and removal in the local
-resource registry. Preparation could not perform root cleanup because
-non-interactive sudo credentials are unavailable.
+Private owner replay directories remain pending explicit owner proof because
+their originals could not be verified without reading private content.
