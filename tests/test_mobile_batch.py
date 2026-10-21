@@ -157,6 +157,38 @@ class DeclineVerifier:
         return False
 
 
+class BlockingVerifier:
+    """Silero stand-in that blocks in its worker thread until released."""
+
+    name = "blocking-verifier"
+    enabled = True
+    available = True
+
+    def __init__(self, started, release, result=True):
+        self._started = started
+        self._release = release
+        self._result = result
+        self.finished = threading.Event()
+
+    def verify(self, pcm):
+        self._started.set()
+        try:
+            self._release.wait(15)
+        finally:
+            self.finished.set()
+        return self._result
+
+
+async def _semaphore_is_held(sem, timeout=0.05):
+    """True when no permit is available (capacity fully held by in-flight work)."""
+    try:
+        await asyncio.wait_for(sem.acquire(), timeout)
+    except TimeoutError:
+        return True
+    sem.release()
+    return False
+
+
 def make_app(monkeypatch, cfg=None, mock=None, verifier=None, converter=None):
     cfg = cfg or Config(token=WS_TOKEN, mobile_token=MOBILE_TOKEN,
                         ollama_url="http://mock-ollama",
@@ -574,6 +606,143 @@ def test_cancellation_keeps_slot_until_inflight_asr_finishes(monkeypatch):
     assert busy.status_code == 503
     assert still_running, "slot must not be released while native ASR runs"
     assert after.status_code == 200
+
+
+def test_slow_upload_is_bounded_by_total_deadline_and_releases_slot(monkeypatch):
+    cfg = Config(token=WS_TOKEN, mobile_token=MOBILE_TOKEN,
+                 ollama_url="http://mock-ollama", mobile_total_timeout_s=0.5)
+    app, mock, _ = make_app(monkeypatch, cfg=cfg, converter=fake_converter())
+
+    async def drip():
+        # Authenticated chunked upload that never finishes on its own: the
+        # body read itself must be bounded by the remaining total deadline.
+        for _ in range(12):
+            await asyncio.sleep(0.25)
+            yield b"x" * 64
+
+    async def scenario():
+        async with async_client(app) as client:
+            headers = dict(AUTH)
+            headers["content-type"] = "multipart/form-data; boundary=dripboundary"
+            began = time.monotonic()
+            resp = await client.post(PATH, headers=headers, content=drip())
+            elapsed = time.monotonic() - began
+            after = await client.post(PATH, headers=AUTH, files=audio_files())
+            return resp, elapsed, after
+
+    resp, elapsed, after = asyncio.run(scenario())
+    assert resp.status_code == 504
+    assert resp.json()["error"] == "deadline_exceeded"
+    assert elapsed < 5, "slow upload must be cut off by the deadline"
+    assert after.status_code == 200, "admission guard must be released"
+    assert mock.requests, "the follow-up request must reach ASR"
+
+
+def test_verifier_cancellation_holds_capacity_until_native_completion(monkeypatch):
+    started, release = threading.Event(), threading.Event()
+    verifier = BlockingVerifier(started, release)
+    cfg = Config(token=WS_TOKEN, mobile_token=MOBILE_TOKEN,
+                 ollama_url="http://mock-ollama", inference_workers=1)
+    app, _, _ = make_app(monkeypatch, cfg=cfg, verifier=verifier,
+                         converter=fake_converter(pcm=speech_pcm(0.5)))
+    sem = app.state.decode_sem
+
+    async def scenario():
+        async with async_client(app) as client:
+            task = asyncio.create_task(client.post(PATH, headers=AUTH,
+                                                   files=audio_files()))
+            await _wait_event(started)
+            busy = await client.post(PATH, headers=AUTH, files=audio_files())
+            held_before = await _semaphore_is_held(sem)
+            task.cancel()
+            await asyncio.sleep(0.1)
+            still_running = not verifier.finished.is_set()
+            held_after = await _semaphore_is_held(sem)
+            release.set()
+            _wait_thread(verifier.finished)
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 10)
+            freed = not await _semaphore_is_held(sem)
+            after = await client.post(PATH, headers=AUTH, files=audio_files())
+            return busy, held_before, still_running, held_after, freed, after
+
+    busy, held_before, still_running, held_after, freed, after = asyncio.run(scenario())
+    assert busy.status_code == 503
+    assert held_before, "decode capacity must be held while Silero runs"
+    assert still_running, "verifier thread must not be treated as cancelled"
+    assert held_after, "cancellation must not release capacity before completion"
+    assert freed, "capacity must be released after the verifier really ends"
+    assert after.status_code == 200
+
+
+def test_verifier_timeout_returns_504_after_native_completion(monkeypatch):
+    started, release = threading.Event(), threading.Event()
+    verifier = BlockingVerifier(started, release)
+    cfg = Config(token=WS_TOKEN, mobile_token=MOBILE_TOKEN,
+                 ollama_url="http://mock-ollama", inference_workers=1,
+                 mobile_total_timeout_s=0.5)
+    app, _, _ = make_app(monkeypatch, cfg=cfg, verifier=verifier,
+                         converter=fake_converter(pcm=speech_pcm(0.5)))
+    sem = app.state.decode_sem
+
+    async def scenario():
+        async with async_client(app) as client:
+            task = asyncio.create_task(client.post(PATH, headers=AUTH,
+                                                   files=audio_files()))
+            await _wait_event(started)
+            await asyncio.sleep(1.3)  # past the (clamped) 1 s deadline
+            busy = await client.post(PATH, headers=AUTH, files=audio_files())
+            held = await _semaphore_is_held(sem)
+            still_running = not verifier.finished.is_set()
+            release.set()
+            slow = await asyncio.wait_for(task, 10)
+            after = await client.post(PATH, headers=AUTH, files=audio_files())
+            return slow, busy, held, still_running, after
+
+    slow, busy, held, still_running, after = asyncio.run(scenario())
+    assert slow.status_code == 504
+    assert slow.json()["error"] == "deadline_exceeded"
+    assert busy.status_code == 503
+    assert held, "decode capacity must stay held across the verifier timeout"
+    assert still_running, "the 504 must wait for native verification to finish"
+    assert after.status_code == 200
+
+
+def test_form_parts_are_closed_on_every_path(monkeypatch):
+    snapshots = []
+    real_close = batchmod.close_form
+
+    def spy(form):
+        uploads = [value for _key, value in form.multi_items()
+                   if not isinstance(value, str)]
+        real_close(form)
+        snapshots.append([
+            (getattr(getattr(value, "file", None), "closed", False),
+             getattr(value, "filename", None))
+            for value in uploads])
+
+    monkeypatch.setattr(batchmod, "close_form", spy)
+    app, mock, _ = make_app(monkeypatch, converter=fake_converter())
+    with TestClient(app) as client:
+        multi = client.post(PATH, headers=AUTH, files=[
+            ("file", ("a.wav", b"aaaa", "audio/wav")),
+            ("file", ("b.wav", b"bbbb", "audio/wav")),
+        ])
+        wrong_name = client.post(PATH, headers=AUTH, files={
+            "audio": ("c.wav", b"cccc", "audio/wav")})
+        ok = client.post(PATH, headers=AUTH, files=audio_files())
+
+    assert multi.status_code == 400
+    assert multi.json()["error"] == "invalid_request"
+    assert wrong_name.status_code == 400
+    assert ok.status_code == 200
+    assert len(snapshots) == 3, "each parsed form must be closed exactly once"
+    multi_parts, wrong_parts, ok_parts = snapshots
+    assert [name for _closed, name in multi_parts] == ["a.wav", "b.wav"]
+    assert all(closed for closed, _name in multi_parts)
+    assert [name for _closed, name in wrong_parts] == ["c.wav"]
+    assert all(closed for closed, _name in wrong_parts)
+    assert all(closed for closed, _name in ok_parts)
 
 
 def test_cancellation_kills_running_converter(monkeypatch):

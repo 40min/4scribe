@@ -384,6 +384,35 @@ def stitch_texts(texts):
     return " ".join(part.strip() for part in texts if part and part.strip())
 
 
+def close_form(form) -> None:
+    """Synchronously release every parsed multipart part's resources.
+
+    Deliberately sync: cleanup has to run on deadline/cancel paths without
+    another await point. `UploadFile.close()` is only async because it wraps
+    `SpooledTemporaryFile.close()` in a threadpool; closing the underlying
+    file here is equivalent and cannot leak a spool on any path (success,
+    413/400 validation, malformed form, cancellation).
+    """
+    if form is None:
+        return
+    try:
+        items = list(form.multi_items())
+    except Exception:  # noqa: BLE001 - non-FormData fallback
+        items = []
+    for _key, value in items:
+        if isinstance(value, str):
+            continue
+        inner = getattr(value, "file", None)
+        closer = getattr(inner, "close", None)
+        if closer is None:
+            continue
+        try:
+            closer()
+        except Exception:  # noqa: BLE001 - already closed/aborted
+            pass
+
+
+
 # ------------------------------------------------------------ transcriber ---
 
 async def _drain_future(fut):
@@ -458,22 +487,21 @@ class BatchTranscriber:
         deadline = started + self.total_timeout_s
         cancel_event = threading.Event()
         tmpdir = None
+        form = None
         try:
-            body = await read_bounded_body(request)
+            body = await self._await_bounded(read_bounded_body(request), deadline)
             if body is None:
                 raise BatchError(413, "payload_too_large",
                                  "upload exceeds the 2 MiB recording limit")
-            upload, form = await self._extract_upload(request, body)
+            form, upload = await self._extract_upload(request, body, deadline)
+            language = _resolve_language(_form_text(form, "language",
+                                                    request.query_params.get("language")))
             content_type = upload.content_type
             filename = upload.filename
-            try:
-                data = await upload.read(MAX_FILE_BYTES + 1)
-            finally:
-                # Release starlette's spooled temp file on every path.
-                try:
-                    await upload.close()
-                except Exception:  # noqa: BLE001 - already closed/aborted
-                    pass
+            data = await upload.read(MAX_FILE_BYTES + 1)
+            # Release every parsed part's spool before any further work.
+            close_form(form)
+            form = None
             if len(data) > MAX_FILE_BYTES:
                 raise BatchError(413, "payload_too_large",
                                  "upload exceeds the 2 MiB recording limit")
@@ -483,8 +511,6 @@ class BatchTranscriber:
             if container is None:
                 raise BatchError(400, "unsupported_audio_format",
                                  "audio must be M4A/AAC or WAV")
-            language = _resolve_language(_form_text(form, "language",
-                                                    request.query_params.get("language")))
             tmpdir, path = self._spool(data)
             async with self._semaphore_slot(deadline):
                 pcm, conversion_s = await self._convert(path, container, deadline,
@@ -495,7 +521,7 @@ class BatchTranscriber:
                 if samples > self.max_samples:
                     raise BatchError(413, "audio_too_long",
                                      "decoded audio exceeds the 61 s limit")
-                if not await self._has_speech(pcm):
+                if not await self._has_speech(pcm, deadline):
                     return self._success("", language, samples, conversion_s, 0.0,
                                          started, mode="verifier_declined")
                 texts, stt_s = await self._transcribe(pcm, language, deadline)
@@ -514,14 +540,42 @@ class BatchTranscriber:
             logger.warning("batch transcription failed: kind=%s", type(exc).__name__)
             return _error(500, "internal_error", "transcription failed")
         finally:
+            close_form(form)  # no-op after the normal-path close above
             if tmpdir is not None:
                 shutil.rmtree(tmpdir, ignore_errors=True)
             self._active.release()
 
     # ---------------------------------------------------------- internals ---
 
-    async def _extract_upload(self, request, body):
-        """Replay the bounded body into starlette's multipart parser."""
+    async def _await_bounded(self, awaitable, deadline):
+        """Await client-facing I/O bounded by the remaining total budget.
+
+        Covers the upload/body read and multipart form parsing so a slow
+        authenticated upload cannot hold the single batch admission slot past
+        the deadline. Nothing is submitted to a worker thread here, so
+        cancelling the coroutine is sufficient cleanup.
+        """
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            # The coroutine was created before this check: close it so an
+            # already-expired budget cannot leak a "never awaited" object.
+            closer = getattr(awaitable, "close", None)
+            if closer is not None:
+                closer()
+            raise BatchError(504, "deadline_exceeded",
+                             "transcription deadline exceeded")
+        try:
+            return await asyncio.wait_for(awaitable, remaining)
+        except TimeoutError:
+            raise BatchError(504, "deadline_exceeded",
+                             "transcription deadline exceeded")
+
+    async def _extract_upload(self, request, body, deadline):
+        """Replay the bounded body into starlette's multipart parser.
+
+        Every parsed part is released on a validation failure too, not only
+        the selected `file` upload.
+        """
         sent = False
 
         async def receive():
@@ -538,24 +592,32 @@ class BatchTranscriber:
         scope["headers"] = headers
         replay = Request(scope, receive)
         try:
-            try:
-                form = await replay.form(max_files=2, max_fields=8,
-                                         max_part_size=MAX_FILE_BYTES + 4096)
-            except TypeError:  # older starlette without limit kwargs
-                form = await replay.form()
+            parse = replay.form(max_files=2, max_fields=8,
+                                max_part_size=MAX_FILE_BYTES + 4096)
+        except TypeError:  # older starlette without limit kwargs
+            parse = replay.form()
+        try:
+            form = await self._await_bounded(parse, deadline)
+        except BatchError:
+            raise
         except Exception:  # noqa: BLE001 - malformed multipart is a client error
             raise BatchError(400, "invalid_request", "malformed multipart body")
         try:
-            files = form.getlist("file")
-        except AttributeError:  # pragma: no cover - non-FormData fallback
-            files = [form.get("file")]
-        if len(files) != 1:
-            raise BatchError(400, "invalid_request",
-                             "exactly one 'file' part is required")
-        upload = files[0]
-        if isinstance(upload, str) or not hasattr(upload, "read"):
-            raise BatchError(400, "invalid_request", "'file' part must be a file")
-        return upload, form
+            try:
+                files = form.getlist("file")
+            except AttributeError:  # pragma: no cover - non-FormData fallback
+                files = [form.get("file")]
+            if len(files) != 1:
+                raise BatchError(400, "invalid_request",
+                                 "exactly one 'file' part is required")
+            upload = files[0]
+            if isinstance(upload, str) or not hasattr(upload, "read"):
+                raise BatchError(400, "invalid_request",
+                                 "'file' part must be a file")
+            return form, upload
+        except BaseException:
+            close_form(form)
+            raise
 
     def _spool(self, data):
         """Private, mode-0600 temp file; removed by the handler's finally."""
@@ -630,15 +692,32 @@ class BatchTranscriber:
             await _drain_future(fut)
             raise
 
-    async def _has_speech(self, pcm):
+    async def _has_speech(self, pcm, deadline):
+        """Silero verification on the shared single-worker pool.
+
+        The verifier thread cannot be cancelled, so its future is shielded and
+        drained before the admission slot is released - exactly like ASR. A
+        fault fails OPEN (never delete real speech).
+        """
         verifier = self.verifier
         if verifier is None or not getattr(verifier, "enabled", False):
             return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise BatchError(504, "deadline_exceeded",
+                             "transcription deadline exceeded")
         loop = asyncio.get_running_loop()
+        fut = loop.run_in_executor(self.vad_pool, verifier.verify, pcm)
         try:
-            if self.vad_pool is not None:
-                return bool(await loop.run_in_executor(self.vad_pool, verifier.verify, pcm))
-            return bool(await loop.run_in_executor(None, verifier.verify, pcm))
+            return bool(await asyncio.wait_for(asyncio.shield(fut), remaining))
+        except TimeoutError:
+            # Capacity is retained until the native verification really ends.
+            await _drain_future(fut)
+            raise BatchError(504, "deadline_exceeded",
+                             "transcription deadline exceeded")
+        except asyncio.CancelledError:
+            await _drain_future(fut)
+            raise
         except Exception as exc:  # noqa: BLE001 - fail OPEN, never delete speech
             logger.warning("batch verifier fault (%s); accepting audio",
                            type(exc).__name__)

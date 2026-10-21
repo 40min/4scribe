@@ -63,7 +63,7 @@ value), otherwise `ru`/`en`. Nothing is translated or forced when omitted.
 | 413 | `payload_too_large`, `audio_too_long` | upload/body over 2 MiB (+overhead), decoded audio over 61 s |
 | 502 | `asr_unavailable` | ASR backend failure |
 | 503 | `batch_unconfigured`, `busy` | endpoint not configured (fail closed) or one request already active |
-| 504 | `deadline_exceeded` | 15 s conversion / 90 s total deadline exceeded |
+| 504 | `deadline_exceeded` | upload/parse, 15 s conversion or 90 s total deadline exceeded |
 
 ## Behaviour and guards
 
@@ -75,7 +75,10 @@ value), otherwise `ru`/`en`. Nothing is translated or forced when omitted.
 - **Bounded upload.** Auth is checked before any body parsing. `Content-Length`
   is only an early hint: the body is consumed through a running byte cap, so a
   chunked upload cannot bypass the limit; the file part is capped again after
-  parsing. Oversize uploads are rejected with `413` before any decode/ASR work.
+  parsing. The body read **and** multipart parsing are bounded by the remaining
+  total deadline, so a slow authenticated upload cannot hold the only batch
+  slot: it ends in `504` and the slot (plus any parsed part spools) is released.
+  Oversize uploads are rejected with `413` before any decode/ASR work.
 - **One active request.** A second concurrent upload gets `503 busy`; nothing is
   queued. ffmpeg decode and ASR reuse the app's shared executor, decode
   semaphore and single-worker Silero verifier, so batch work never occupies
@@ -91,19 +94,26 @@ value), otherwise `ru`/`en`. Nothing is translated or forced when omitted.
   into contiguous windows and the transcripts are stitched verbatim - no
   dropped tail, no LLM rewrite, no invented word de-duplication.
 - **Deadline honesty.** A timed-out/cancelled request never frees the inference
-  slot while native ASR work is still running; the slot is released only after
-  the worker returns. New uploads are refused (`503`) meanwhile, so work cannot
-  stack on top of in-flight inference. The native Ollama call itself is not
-  cancellable (existing 600 s HTTP timeout), so in that pathological case the
-  `504` is returned after the decode finishes instead of pretending otherwise.
+  slot while native work (ASR or the Silero verifier) is still running; the slot
+  is released only after that worker returns. New uploads are refused (`503`)
+  meanwhile, so work cannot stack on top of in-flight inference. The native
+  Ollama call itself is not cancellable (existing 600 s HTTP timeout), so in
+  that pathological case the `504` is returned after the decode finishes
+  instead of pretending otherwise.
+- **Spool cleanup.** Every parsed multipart part's spooled file is closed on
+  every path - success, size/format/language rejection, wrong number of `file`
+  parts, malformed form, deadline and cancellation - not only the selected
+  upload.
 - **Logging.** Status, sizes and timings only - no audio, transcript or token
   content.
 
 ## Remaining deployment work (owner)
 
-1. **Image ffmpeg layer (blocked in this stage).** `Dockerfile` is currently
-   owned by another account and was not writable by the agent. Apply exactly
-   this hunk before building (it is the only new system dependency):
+1. **Image ffmpeg layer (still blocked).** `Dockerfile` remains owned by
+   another account and is not writable by this agent; no ownership or
+   filesystem change was attempted. Apply exactly this hunk before building
+   (it is the only new system dependency). Until then the image has no ffmpeg
+   and real uploads fail decode; the image is **not deployment-ready**.
 
    ```dockerfile
    WORKDIR /app
