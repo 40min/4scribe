@@ -49,6 +49,20 @@ class Config:
     # env-driven production launch (Config.from_env) enables it by default.
     # Disable live with FSCRIBE_SILERO_ENABLED=0.
     silero_enabled: bool = False
+    # Mobile batch API (HardAfanasii, POST /4scribe/v1/audio/transcriptions).
+    # A SEPARATE Bearer that is never the realtime token. Empty default keeps
+    # the endpoint disabled/fail-closed for existing deployments; the owner
+    # provisions FSCRIBE_MOBILE_TOKEN in the external env file separately.
+    # Missing, placeholder, too-short or WS-token-equal values disable batch
+    # (503) instead of opening an unauthenticated or shared-key path.
+    mobile_token: str = ""
+    mobile_total_timeout_s: float = 90.0
+    mobile_convert_timeout_s: float = 15.0
+    mobile_max_duration_s: float = 61.0
+    # ASR window stays well below the ~60 s Qwen context: 61 s client audio is
+    # split at pauses into windows of at most this length (5..60 enforced).
+    mobile_asr_window_s: float = 40.0
+    mobile_ffmpeg_bin: str = "ffmpeg"
 
     @classmethod
     def from_env(cls):
@@ -67,4 +81,10 @@ class Config:
             max_pending_finals=_int("FSCRIBE_MAX_PENDING_FINALS", 4),
             outbound_queue_max=_int("FSCRIBE_OUTBOUND_QUEUE_MAX", 512),
             silero_enabled=(os.environ.get("FSCRIBE_SILERO_ENABLED", "1") != "0"),
+            mobile_token=(os.environ.get("FSCRIBE_MOBILE_TOKEN") or "").strip(),
+            mobile_total_timeout_s=_float("FSCRIBE_MOBILE_TOTAL_TIMEOUT_S", 90.0),
+            mobile_convert_timeout_s=_float("FSCRIBE_MOBILE_CONVERT_TIMEOUT_S", 15.0),
+            mobile_max_duration_s=_float("FSCRIBE_MOBILE_MAX_DURATION_S", 61.0),
+            mobile_asr_window_s=_float("FSCRIBE_MOBILE_ASR_WINDOW_S", 40.0),
+            mobile_ffmpeg_bin=os.environ.get("FSCRIBE_MOBILE_FFMPEG_BIN") or "ffmpeg",
         )

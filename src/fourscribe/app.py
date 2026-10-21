@@ -3,7 +3,9 @@
 Auth: Authorization: Bearer <token>. The default is a TEST token (tests supply
 their own); FSCRIBE_TOKEN is only for local/non-live use - the deployed
 production Bearer is provisioned via the owner-approved deployment plan, never
-here. Logs must not store audio samples, transcripts or tokens.
+here. The mobile batch endpoint uses a SEPARATE Bearer (FSCRIBE_MOBILE_TOKEN,
+see batch.py / docs/mobile-batch-api.md); it never accepts the realtime token.
+Logs must not store audio samples, transcripts or tokens.
 
 Bounded delivery: outbound events go through BoundedEventQueue (ordered,
 bounded, sync never-blocking put). Under backpressure stale provisional deltas
@@ -24,6 +26,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from .aligner import get_aligner
 from .asr import OllamaChat
+from .batch import BATCH_HTTP_PATHS, BatchTranscriber
 from .config import Config
 from .lifecycle_trace import new_session_tracer
 from .session import RealtimeSession
@@ -136,17 +139,29 @@ def create_app(cfg: Config = None, http_factory=None, aligner=None, verifier=Non
     decode_sem = asyncio.Semaphore(cfg.inference_workers)
     app = FastAPI(title="4scribe", version="0.1.0")
 
+    # Mobile batch API (HardAfanasii). Reuses the app's executor, decode
+    # semaphore and single-pool Silero verifier; disabled (503) unless a
+    # separate FSCRIBE_MOBILE_TOKEN is configured. See batch.py.
+    batch = BatchTranscriber(cfg, asr=asr, pool=pool, decode_sem=decode_sem,
+                             verifier=verifier, vad_pool=vad_pool)
+    app.state.batch_transcriber = batch
+    app.state.decode_pool = pool
+    app.state.decode_sem = decode_sem
+    app.state.verifier = verifier
+
     async def _healthz_impl():
         return {"ok": True, "aligner": aligner.name,
                 "verifier": verifier.name,
-                "word_timestamps": bool(aligner.available)}
+                "word_timestamps": bool(aligner.available),
+                "mobile_batch": batch.status()}
 
     async def _readyz_impl():
         # light readiness: loopback Ollama reachable via /api/tags; no model warm-up
         ok = await asyncio.get_running_loop().run_in_executor(pool, asr.reachable)
         return {"ready": ok, "aligner": aligner.name,
                 "word_timestamps": bool(aligner.available),
-                "workers": cfg.inference_workers}
+                "workers": cfg.inference_workers,
+                "mobile_batch": batch.status()}
 
     # Root pair (existing contract) + identical aliases under the served
     # /4scribe prefix so health checks answer whichever verbatim-prefix mode
@@ -262,5 +277,11 @@ def create_app(cfg: Config = None, http_factory=None, aligner=None, verifier=Non
 
     for path in REALTIME_WS_PATHS:
         app.add_api_websocket_route(path, realtime)
+
+    # Ordinary HTTP multipart batch endpoint (NOT streaming), prefixed route
+    # plus the loopback alias mirroring the health/WS pattern above. No legacy
+    # /parakeet-test URL is served or preserved here.
+    for path in BATCH_HTTP_PATHS:
+        app.post(path)(batch.handle)
 
     return app

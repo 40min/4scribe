@@ -7,6 +7,9 @@ fastapi==0.143.3
 uvicorn==0.54.0
 httpx==0.28.1
 websockets==17.2
+# Multipart form parsing for the mobile batch endpoint (starlette's form
+# parser requires it). Pinned like every other direct runtime dependency.
+python-multipart==0.0.20
 numpy==2.5.4
 packaging==26.3
 # --- ASR/aligner stack ---
