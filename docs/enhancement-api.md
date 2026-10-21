@@ -18,7 +18,8 @@ the batch endpoint, the glossary, deployment or the legacy service.
 | Body | `{"text": "<non-empty string>", "language": "auto" \| "ru" \| "en"}` |
 | Text limit | 4 000 characters, rejected (never truncated) |
 | Raw body limit | 32 KiB measured on the streamed bytes (Content-Length is advisory) |
-| Deadline | 5 s total, including slow upload/body read and the Ollama call |
+| Client deadline | 5 s total, including slow upload/body read and waiting for the response |
+| Upstream budget | separate finite 60 s cap for the submitted Ollama call |
 | Admission | one active enhancement, no queue; a second concurrent request gets `429` |
 | Upstream response cap | 512 KiB streamed bytes |
 
@@ -73,8 +74,8 @@ Codes and statuses are the migrated implementation's codes:
 | 422 | `invalid_input` | malformed/non-object JSON, non-string or empty/blank `text`, bad `language`, wrong content type |
 | 429 | `enhancement_busy` | another enhancement request owns the single slot |
 | 502 | `invalid_model_output` | malformed/truncated/empty/oversized or implausibly collapsed model output |
-| 503 | `enhancement_unavailable` | endpoint not configured, upstream non-200 or transport failure |
-| 504 | `enhancement_timeout` | 5 s total deadline exceeded (body read or model wait) |
+| 503 | `enhancement_unavailable` | endpoint not configured or latched, upstream non-200, or transport failure with unknown completion |
+| 504 | `enhancement_timeout` | 5 s client deadline exceeded (body read or waiting for the model response) |
 
 ## Authentication and configuration
 
@@ -89,7 +90,8 @@ Codes and statuses are the migrated implementation's codes:
   secret is read, generated or committed here. Local development uses a fake
   value in the git-ignored `.env` only.
 - `FSCRIBE_ENHANCER_MODEL` may override the migrated default `qwen3:0.6b`;
-  `FSCRIBE_ENHANCEMENT_DEADLINE_S` may override the 5 s deadline for local
+  `FSCRIBE_ENHANCEMENT_DEADLINE_S` may override the 5 s client deadline and
+  `FSCRIBE_ENHANCEMENT_UPSTREAM_TIMEOUT_S` the 60 s upstream budget for local
   testing. Changing the model is an operational choice, not part of this port.
 
 ## Corrector behaviour (migrated unchanged)
@@ -123,16 +125,40 @@ Known limitations of the migrated behaviour (documented, not fixed here):
   correction against transcription or batch work. Both still share the same
   physical Ollama/CPU resources, so real CPU contention remains possible; this
   task does not add a scheduler.
+- The client response deadline and the upstream budget are **separate**. The
+  client receives `504` at 5 s, but the submitted HTTP call keeps its own 60 s
+  timeout; the single admission slot remains held until that call actually
+  completes. Meanwhile new requests receive `429`. This prevents the client
+  timeout itself from looking like upstream completion.
 - A timeout or HTTP/client cancellation does **not** abort native Ollama
-  generation. The single admission slot remains held until the submitted
-  coroutine actually completes; meanwhile new requests receive `429`. No retry
-  loop or unbounded background task is created.
+  generation. No retry loop or unbounded background task is created.
+- On a clean model response (including a guard/HTTP-status failure), admission
+  is released because the call demonstrably finished.
+- A slow authenticated upload is bounded by the client deadline and, if it
+  times out before any upstream submission, releases the slot normally.
 - The async `httpx.AsyncClient` is created on application startup and closed on
-  shutdown by the app lifecycle (never a module-level client).
-- A slow authenticated upload is bounded by the same total deadline and, once
-  it times out before any upstream submission, releases the slot normally.
+  shutdown by the app lifecycle (never a module-level client). Shutdown
+  cancels in-flight/release tasks and closes the client within a 1 s bound,
+  consuming task exceptions; cancellation is not treated as completion proof.
 - Logs contain status codes and character counts only; no transcript text,
   audio or tokens.
+
+### Unknown native completion latch
+
+A read/write timeout, connection loss or protocol failure **after submission**
+means HTTP no longer proves whether Ollama finished generating. The server does
+not guess: it sets `completion_unknown` in `/healthz` (under
+`text_enhancement`), latches the endpoint, and returns `503`
+`enhancement_unavailable` for further authenticated requests without starting
+new model work. Connect/pool failures before a request can be submitted are
+ordinary `503` failures and do not latch.
+
+Safe recovery is an explicit service restart, which creates a fresh corrector
+with no latch. An operator should restart only after allowing the bounded
+upstream budget to elapse or confirming in Ollama that no generation remains;
+the server makes no automatic Ollama reload/probe, speculative retry or
+scheduler decision. This is intentionally fail-closed rather than silently
+stacking orphan generations.
 
 ## Out of scope
 

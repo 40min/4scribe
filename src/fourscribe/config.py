@@ -70,6 +70,10 @@ class Config:
     enhancement_token: str = ""
     enhancer_model: str = "qwen3:0.6b"
     enhancement_deadline_s: float = 5.0
+    # Separate finite budget for the submitted Ollama call. The 5 s client
+    # deadline can answer 504 while generation is still running; admission is
+    # retained until this upstream call actually completes.
+    enhancement_upstream_timeout_s: float = 60.0
 
     @classmethod
     def from_env(cls):
@@ -98,4 +102,6 @@ class Config:
             enhancer_model=(os.environ.get("FSCRIBE_ENHANCER_MODEL")
                             or "qwen3:0.6b"),
             enhancement_deadline_s=_float("FSCRIBE_ENHANCEMENT_DEADLINE_S", 5.0),
+            enhancement_upstream_timeout_s=_float(
+                "FSCRIBE_ENHANCEMENT_UPSTREAM_TIMEOUT_S", 60.0),
         )

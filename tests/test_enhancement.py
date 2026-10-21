@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -89,6 +90,78 @@ async def app_client(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                      base_url=BASE) as client:
             yield client
+
+
+def make_real_upstream_app(cfg):
+    """App whose enhancer uses a REAL httpx socket to cfg.ollama_url."""
+    return appmod.create_app(
+        cfg,
+        lambda: httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(404, json={})),
+            base_url=cfg.ollama_url),
+        aligner=FakeAligner())
+
+
+@asynccontextmanager
+async def chat_server(*, first_delay=0.0, first_close=False, later_delay=0.0):
+    """Tiny real local HTTP server with controllable generation timing.
+
+    It reads the full request body before simulating generation. A client
+    disconnect does not stop the simulated job; that is exactly the behaviour
+    the admission policy must survive.
+    """
+    started = asyncio.Event()
+    first_finished = asyncio.Event()
+    state = {"started": 0}
+
+    async def handler(reader, writer):
+        try:
+            header = await reader.readuntil(b"\r\n\r\n")
+            length = 0
+            for line in header.split(b"\r\n")[1:]:
+                name, _, value = line.partition(b":")
+                if name.strip().lower() == b"content-length":
+                    length = int(value.strip())
+            body = await reader.readexactly(length)
+            payload = json.loads(body)
+            state["started"] += 1
+            number = state["started"]
+            started.set()
+            if first_close and number == 1:
+                writer.close()
+                await writer.wait_closed()
+                return
+            await asyncio.sleep(first_delay if number == 1 else later_delay)
+            if number == 1:
+                first_finished.set()
+            content = payload["messages"][-1]["content"]
+            encoded = json.dumps({
+                "message": {"content": content},
+                "done": True,
+                "done_reason": "stop",
+                "eval_count": 5,
+            }).encode()
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                b"Content-Length: " + str(len(encoded)).encode() +
+                b"\r\nConnection: close\r\n\r\n" + encoded)
+            await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except (ConnectionError, RuntimeError):
+                pass
+
+    server = await asyncio.start_server(handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        yield server, port, started, first_finished, state
+    finally:
+        server.close()
+        await server.wait_closed()
 
 
 async def wait_unlocked(sem, timeout=5.0):
@@ -206,7 +279,8 @@ def test_unsafe_configuration_fails_closed(token, reason):
         health = client.get("/healthz").json()["text_enhancement"]
         resp = client.post(PATH, headers={"authorization": "Bearer " + token},
                            json={"text": "тест"})
-    assert health == {"enabled": False, "reason": reason}
+    assert health == {"enabled": False, "reason": reason,
+                      "completion_unknown": False}
     assert resp.status_code == 503
     assert resp.json() == {"error": {"code": "enhancement_unavailable"}}
     assert mock.requests == []
@@ -216,7 +290,7 @@ def test_enabled_health_status():
     app, _, _ = make_app()
     with TestClient(app) as client:
         assert client.get("/healthz").json()["text_enhancement"] == {
-            "enabled": True, "reason": "ok"}
+            "enabled": True, "reason": "ok", "completion_unknown": False}
 
 
 # -------------------------------------------------------- strict JSON input ----
@@ -354,10 +428,11 @@ def test_oversized_upstream_body_is_bounded_and_rejected():
     assert resp.json() == {"error": {"code": "enhancement_unavailable"}}
 
 
-def test_upstream_timeout_is_504():
+def test_client_deadline_is_504_with_still_running_upstream():
     cfg = Config(token=WS_TOKEN, mobile_token=MOBILE_TOKEN,
                  enhancement_token=ENH_TOKEN, ollama_url="http://mock-ollama",
-                 enhancement_deadline_s=0.2, silero_enabled=False)
+                 enhancement_deadline_s=0.2,
+                 enhancement_upstream_timeout_s=2.0, silero_enabled=False)
 
     async def slow(_body):
         await asyncio.sleep(1.0)
@@ -499,6 +574,158 @@ def test_deadline_timeout_keeps_slot_until_submitted_work_completes(monkeypatch)
     assert held, "the 504 must not release admission while work still runs"
     assert still_running
     assert after.status_code == 200
+
+
+def test_real_socket_client_504_keeps_admission_until_upstream_completes():
+    """Real httpx socket timeouts, not MockTransport's no-timeout handler.
+
+    The local server keeps its simulated generation running after the client
+    response deadline. The first request gets 504, a concurrent request stays
+    busy, and admission returns only after the observed upstream completion.
+    """
+    async def scenario():
+        async with chat_server(first_delay=0.8, later_delay=0.0) as (
+                _server, port, started, finished, state):
+            cfg = Config(
+                token=WS_TOKEN, mobile_token=MOBILE_TOKEN,
+                enhancement_token=ENH_TOKEN,
+                ollama_url=f"http://127.0.0.1:{port}",
+                enhancement_deadline_s=0.1,
+                enhancement_upstream_timeout_s=3.0, silero_enabled=False)
+            app = make_real_upstream_app(cfg)
+            sem = app.state.text_enhancer._slot
+            async with app_client(app) as client:
+                task = asyncio.create_task(
+                    client.post(PATH, headers=AUTH, json={"text": "тест"}))
+                await asyncio.wait_for(started.wait(), 2)
+                first = await asyncio.wait_for(task, 2)
+                await asyncio.sleep(0.03)
+                busy = await client.post(PATH, headers=AUTH,
+                                         json={"text": "второй"})
+                still_running = not finished.is_set()
+                held = sem.locked()
+                await asyncio.wait_for(finished.wait(), 2)
+                await wait_unlocked(sem)
+                after = await client.post(PATH, headers=AUTH,
+                                          json={"text": "третий"})
+                return first, busy, still_running, held, after, state
+
+    first, busy, still_running, held, after, state = asyncio.run(scenario())
+    assert first.status_code == 504
+    assert busy.status_code == 429
+    assert held, "a real client timeout must not release admission early"
+    assert still_running, "the local upstream job must still be generating"
+    assert after.status_code == 200, "admission recovers on observed completion"
+    assert state["started"] == 2, "the busy request must never reach upstream"
+
+
+def test_real_transport_loss_latches_closed_and_restart_recovers():
+    """Unknown native completion fails closed; a new app instance recovers."""
+    async def scenario():
+        async with chat_server(first_close=True, later_delay=0.0) as (
+                _server, port, _started, _finished, state):
+            cfg = Config(
+                token=WS_TOKEN, mobile_token=MOBILE_TOKEN,
+                enhancement_token=ENH_TOKEN,
+                ollama_url=f"http://127.0.0.1:{port}",
+                enhancement_deadline_s=2.0,
+                enhancement_upstream_timeout_s=5.0, silero_enabled=False)
+            app = make_real_upstream_app(cfg)
+            async with app_client(app) as client:
+                first = await client.post(PATH, headers=AUTH,
+                                          json={"text": "первый"})
+                second = await client.post(PATH, headers=AUTH,
+                                           json={"text": "второй"})
+                health_resp = await client.get("/healthz")
+                health = health_resp.json()["text_enhancement"]
+                calls_with_latch = state["started"]
+            # A fresh app instance is the documented safe recovery (restart).
+            app2 = make_real_upstream_app(cfg)
+            async with app_client(app2) as client2:
+                after = await client2.post(PATH, headers=AUTH,
+                                           json={"text": "третий"})
+            return first, second, health, calls_with_latch, after, state
+
+    first, second, health, calls, after, state = asyncio.run(scenario())
+    assert first.status_code == 503
+    assert first.json() == {"error": {"code": "enhancement_unavailable"}}
+    assert second.status_code == 503
+    assert second.json() == {"error": {"code": "enhancement_unavailable"}}
+    assert health["completion_unknown"] is True
+    assert calls == 1, "latched endpoint must not start another generation"
+    assert after.status_code == 200, "restart clears the explicit latch"
+    assert state["started"] == 2
+
+
+def test_real_exhausted_upstream_budget_latches_unknown_completion():
+    """An upstream read timeout is not proof that generation stopped."""
+    async def scenario():
+        async with chat_server(first_delay=0.8, later_delay=0.0) as (
+                _server, port, started, _finished, state):
+            cfg = Config(
+                token=WS_TOKEN, mobile_token=MOBILE_TOKEN,
+                enhancement_token=ENH_TOKEN,
+                ollama_url=f"http://127.0.0.1:{port}",
+                enhancement_deadline_s=0.1,
+                enhancement_upstream_timeout_s=0.25, silero_enabled=False)
+            app = make_real_upstream_app(cfg)
+            enhancer = app.state.text_enhancer
+            async with app_client(app) as client:
+                task = asyncio.create_task(
+                    client.post(PATH, headers=AUTH, json={"text": "первый"}))
+                await asyncio.wait_for(started.wait(), 2)
+                first = await asyncio.wait_for(task, 2)
+                for _ in range(100):
+                    if enhancer._completion_unknown:
+                        break
+                    await asyncio.sleep(0.01)
+                second = await client.post(PATH, headers=AUTH,
+                                           json={"text": "второй"})
+                return first, second, enhancer._completion_unknown, state
+
+    first, second, latched, state = asyncio.run(scenario())
+    assert first.status_code == 504
+    assert latched, "exhausted upstream budget must latch unknown completion"
+    assert second.status_code == 503
+    assert second.json() == {"error": {"code": "enhancement_unavailable"}}
+    assert state["started"] == 1, "latched endpoint must not start new work"
+
+
+def test_shutdown_is_bounded_closes_client_and_consumes_tasks():
+    started = None
+    release = None
+
+    async def blocking(_body):
+        started.set()
+        await release.wait()  # must be cancelled by shutdown, not awaited out
+        return chat_response("поздно")
+
+    app, _, _ = make_app(responder=blocking)
+
+    async def scenario():
+        nonlocal started, release
+        started, release = asyncio.Event(), asyncio.Event()
+        async with app_client(app) as client:
+            enhancer = app.state.text_enhancer
+            task = asyncio.create_task(
+                client.post(PATH, headers=AUTH, json={"text": "первый"}))
+            await asyncio.wait_for(started.wait(), 2)
+            owned = enhancer._client
+            began = time.monotonic()
+            await asyncio.wait_for(enhancer.close(), 3)
+            elapsed = time.monotonic() - began
+            result = await asyncio.gather(task, return_exceptions=True)
+            await asyncio.sleep(0)
+            return (elapsed, owned, enhancer, result)
+
+    elapsed, owned, enhancer, result = asyncio.run(scenario())
+    assert elapsed < 2.5, "shutdown must be bounded"
+    assert owned.is_closed
+    assert enhancer._client is None
+    assert not enhancer._work_tasks
+    assert not enhancer._retained
+    assert not enhancer._slot.locked(), "shutdown must not leak admission"
+    assert result, "the cancelled endpoint task must be consumed"
 
 
 def test_slow_upload_is_bounded_by_total_deadline_and_releases_slot():

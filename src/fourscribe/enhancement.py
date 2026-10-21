@@ -20,8 +20,11 @@ Guards (see docs/enhancement-api.md):
 - request body is capped while streaming at 32 KiB (Content-Length is only a
   hint) and text at 4000 characters, rejected rather than truncated;
 - upstream response is capped while streaming at 512 KiB;
-- a timeout/cancel does NOT cancel native Ollama generation: the single
-  admission slot stays held until the submitted coroutine really completes;
+- the 5 s client deadline and the finite 60 s upstream call budget are
+  separate; a 504 keeps admission until the submitted call really completes;
+- a timeout/cancel does NOT cancel native Ollama generation. If transport
+  loss leaves native completion unprovable, the endpoint latches unavailable
+  (health `completion_unknown`) until an explicit service restart;
 - logs carry status/sizes only, never text or tokens.
 """
 import asyncio
@@ -82,6 +85,8 @@ BODY_LIMIT = 32 * 1024
 MAX_TEXT_CHARS = 4000
 MAX_RESPONSE_BYTES = 512 * 1024
 DEADLINE_S = 5.0
+UPSTREAM_TIMEOUT_S = 60.0
+SHUTDOWN_WAIT_S = 1.0
 MIN_TOKEN_LEN = 16
 PLACEHOLDER_TOKENS = frozenset({"test-token", "changeme", "change-me"})
 LANGUAGES = ("auto", "ru", "en")
@@ -113,8 +118,27 @@ class BodyTooLarge(Exception):
     """The raw JSON body exceeded the streaming cap."""
 
 
+class UpstreamCompletionUnknown(Exception):
+    """The HTTP transport ended without proving that generation completed.
+
+    A read/write timeout or connection loss after submission means Ollama may
+    still be generating. There is no safe way to infer native completion from
+    an HTTP disconnect, so the endpoint latches unavailable (see docs).
+    """
+
+
 def _error(code: str) -> JSONResponse:
     return EnhanceError(code).response()
+
+
+def _consume_task_exception(task):
+    """Mark a task's result/exception retrieved (bounded cleanup helper)."""
+    if not task.done():
+        return
+    try:
+        task.exception()
+    except BaseException:  # noqa: BLE001 - cancellation is expected
+        pass
 
 
 def _enhance_options(text_len: int) -> dict:
@@ -201,6 +225,12 @@ class TextEnhancer:
             self.deadline_s = max(float(deadline), 0.05)
         except (TypeError, ValueError):
             self.deadline_s = DEADLINE_S
+        upstream_timeout = getattr(cfg, "enhancement_upstream_timeout_s",
+                                   UPSTREAM_TIMEOUT_S)
+        try:
+            self.upstream_timeout_s = max(float(upstream_timeout), 0.05)
+        except (TypeError, ValueError):
+            self.upstream_timeout_s = UPSTREAM_TIMEOUT_S
         self.max_text_chars = MAX_TEXT_CHARS
         self.body_limit = BODY_LIMIT
         self.max_response_bytes = MAX_RESPONSE_BYTES
@@ -209,6 +239,9 @@ class TextEnhancer:
         # At most one submitted work item exists because the slot stays held
         # until it finishes; keep the release task strongly referenced.
         self._retained = set()
+        self._work_tasks = set()
+        self._completion_unknown = False
+        self._closing = False
         self._client = None
         self._client_factory = client_factory or (
             lambda: httpx.AsyncClient(base_url=cfg.ollama_url,
@@ -224,10 +257,13 @@ class TextEnhancer:
         return bool(self.token)
 
     def status(self):
-        return {"enabled": self.enabled, "reason": self.disabled_reason}
+        return {"enabled": self.enabled, "reason": self.disabled_reason,
+                "completion_unknown": self._completion_unknown}
 
     async def start(self):
         """Create the async HTTP client on app startup (never module-level)."""
+        if self._closing:
+            raise EnhanceError("enhancement_unavailable")
         if self._client is None:
             client = self._client_factory()
             if inspect.isawaitable(client):
@@ -235,10 +271,29 @@ class TextEnhancer:
             self._client = client
 
     async def close(self):
-        """Close the app-owned async client exactly once."""
+        """Bounded shutdown: cancel in-flight tasks and close the client.
+
+        Cancellation is a process-shutdown action, not evidence about native
+        completion. All task exceptions are consumed and the wait is finite.
+        """
+        self._closing = True
         client, self._client = self._client, None
+        tasks = set(self._retained) | set(self._work_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            _done, pending = await asyncio.wait(tasks, timeout=SHUTDOWN_WAIT_S)
+            for task in pending:
+                task.cancel()
+            for task in tasks:
+                _consume_task_exception(task)
+        self._retained.clear()
+        self._work_tasks.clear()
         if client is not None:
-            await client.aclose()
+            try:
+                await asyncio.wait_for(client.aclose(), SHUTDOWN_WAIT_S)
+            except BaseException:  # noqa: BLE001 - shutdown is bounded
+                logger.warning("text enhancement client close exceeded its bound")
 
     # --------------------------------------------------------------- route --
 
@@ -247,6 +302,10 @@ class TextEnhancer:
             return _error("enhancement_unavailable")
         if not authorized(request.headers.get("authorization"), self.token):
             return _error("unauthorized")
+        if self._completion_unknown:
+            # After an unprovable transport loss we cannot rule out a still
+            # running native generation. Fail closed until process restart.
+            return _error("enhancement_unavailable")
         content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         if content_type != "application/json":
             return _error("invalid_input")
@@ -286,7 +345,15 @@ class TextEnhancer:
             if remaining <= 0:
                 return _error("enhancement_timeout")
             await self.start()  # no-op after app startup; safe for bare ASGI use
-            work = asyncio.create_task(self._ollama_correct(text, remaining))
+            # The submitted call gets its OWN finite budget, longer than the
+            # client response deadline. A 504 must not shorten the upstream
+            # HTTP timeout, otherwise the timeout itself would look like
+            # completion while Ollama is still generating.
+            work = asyncio.create_task(
+                self._ollama_correct(text, self.upstream_timeout_s))
+            self._work_tasks.add(work)
+            work.add_done_callback(self._work_tasks.discard)
+            work.add_done_callback(_consume_task_exception)
             try:
                 corrected = await asyncio.wait_for(asyncio.shield(work), remaining)
             except TimeoutError:
@@ -296,9 +363,13 @@ class TextEnhancer:
                 self._retain_release(work)
                 return _error("enhancement_timeout")
             except asyncio.CancelledError:
-                deferred_release = True
-                self._retain_release(work)
+                if not self._closing:
+                    deferred_release = True
+                    self._retain_release(work)
                 raise
+            except UpstreamCompletionUnknown:
+                self._latch_unknown()
+                return _error("enhancement_unavailable")
             except EnhanceError as failure:
                 return failure.response()
             except Exception as exc:  # noqa: BLE001 - never leak internals
@@ -326,11 +397,22 @@ class TextEnhancer:
         task = asyncio.create_task(self._release_when_done(work))
         self._retained.add(task)
         task.add_done_callback(self._retained.discard)
+        task.add_done_callback(_consume_task_exception)
+
+    def _latch_unknown(self):
+        """Fail closed after a transport loss with unknown native completion."""
+        if self._closing or self._completion_unknown:
+            return
+        self._completion_unknown = True
+        logger.error("text enhancement latched unavailable: upstream completion "
+                     "unknown after transport loss; restart the service to recover")
 
     async def _release_when_done(self, work):
         """Hold admission until submitted work truly finishes (no cancel)."""
         try:
             await work
+        except UpstreamCompletionUnknown:
+            self._latch_unknown()
         except BaseException:  # noqa: BLE001 - result was already reported/discarded
             pass
         finally:
@@ -356,11 +438,18 @@ class TextEnhancer:
         try:
             status, raw = await self._bounded_post(
                 "/api/chat", body, max(timeout_s, 0.001))
-        except httpx.ConnectTimeout:
+        except (httpx.ConnectTimeout, httpx.PoolTimeout):
+            # No request reached the model, so no native work is outstanding.
             raise EnhanceError("enhancement_unavailable")
-        except httpx.TimeoutException:
-            raise EnhanceError("enhancement_timeout")
-        except (httpx.RequestError, ValueError):
+        except (httpx.ReadTimeout, httpx.WriteTimeout):
+            # The request may have been submitted and generation may continue.
+            raise UpstreamCompletionUnknown()
+        except httpx.RequestError:
+            # Protocol/read/write loss after submission is not completion.
+            raise UpstreamCompletionUnknown()
+        except ValueError:
+            # Bounded response overflow: the HTTP response was delivered, so
+            # generation itself is complete; this is a normal 503 failure.
             raise EnhanceError("enhancement_unavailable")
         if status != 200:
             raise EnhanceError("enhancement_unavailable")
