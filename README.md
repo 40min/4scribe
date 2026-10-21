@@ -1,6 +1,7 @@
 # 4scribe
 
-Local speech-to-text for Loqui streaming and HardAfanasii batch requests. Python/FastAPI serves revisable partial
+Local speech-to-text and text enhancement for Loqui streaming, HardAfanasii
+batch requests and the standalone enhancement API. Python/FastAPI serves revisable partial
 transcripts, completed segments and word timestamps using Qwen3-ASR through
 Ollama and Qwen3-ForcedAligner on CPU. English or Russian is selected per session.
 
@@ -68,9 +69,13 @@ Batch requests use `POST /4scribe/v1/audio/transcriptions`, multipart field
 Source/development checkout: `/opt/40zen/repos/4scribe`. Runtime Compose and the
 read-only model cache remain under `/opt/40zen/services/4scribe`; credentials
 remain in the external root-only `/opt/40zen/secrets/4scribe.env`. Host rollback
-is retired. Loqui standalone text enhancement now uses the dedicated 4scribe route/key.
-Legacy service retirement is not yet complete; verify remaining consumers before removal. See
-`docs/container-permanent.md` for operations and pending cleanup boundaries.
+is retired. Loqui streaming, optional HardAfanasii batch and standalone text
+enhancement all use this one 4scribe server. The legacy Parakeet/Nemotron stack
+was retired permanently on 2026-10-21 with no backup; old routes, models, images
+and credentials are absent. See `docs/container-permanent.md` for operations.
+
+Inline batch/WS enhancement flags remain **To-do** and are not enabled. This
+retirement does not claim any model-quality improvement.
 
 Pre-decode speech verification uses pinned `silero-vad==6.2.3` (MIT, bundled
 JIT model). Env-driven startup enables it by default; disable with

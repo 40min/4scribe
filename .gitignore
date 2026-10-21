@@ -14,9 +14,6 @@
 !/deployment/smoke_wss.py
 !/deployment/compose.yaml
 !/deployment/retire-host-runtime.sh
-!/deployment/retire-legacy-stt.sh
-!/deployment/legacy_serve_guard.py
-!/deployment/test_legacy_retirement.py
 !/deployment/cleanup-residual-scratch.sh
 !/deployment/container-acceptance.sh
 !/deployment/enhancement-candidate-smoke.sh

@@ -12,8 +12,11 @@ Development/source checkout: `/opt/40zen/repos/4scribe`. Active runtime Compose
 and cache remain under `/opt/40zen/services/4scribe`. Batch uses
 `/4scribe/v1/audio/transcriptions` and separate `FSCRIBE_MOBILE_TOKEN`; streaming
 keeps `FSCRIBE_TOKEN`. Both are external root-only env entries. Batch has no
-text enhancer. Loqui standalone enhancement has migrated to 4scribe. Legacy service retirement
-remains a separate consumer audit/removal step.
+text enhancer. Loqui streaming, optional HardAfanasii batch and standalone
+enhancement all use this one 4scribe server. The legacy Parakeet/Nemotron stack
+was retired permanently on 2026-10-21, including its containers, models, images,
+routes and dedicated credentials; no backup or rollback copy was retained.
+Inline batch/WS enhancement flags remain **To-do** and are not enabled.
 
 The container includes Python, the app, Silero VAD and forced aligner runtime.
 Its sole bind mount is `/opt/40zen/services/4scribe/model-cache/hf` → `/models/hf`
@@ -75,12 +78,13 @@ mounts and active processes before deleting any remaining replay copies,
 experiments, backups or caches. The local-only resource registry records these
 pending candidates; it is not public documentation or an automatic deletion list.
 
-Justified final holds: `/tmp/opencode/parakeet-test/ru_test.wav` is the default
-RU fixture of `services/parakeet/scripts/smoke-test.sh`, not unidentified
-garbage; `deployment/PLAN.md`, `deployment/RESULT.json` and
+Justified final holds: `deployment/PLAN.md`, `deployment/RESULT.json` and
 `deployment/real_aligner_check.py` are retained historical acceptance/
-diagnostic evidence. Superseded trial/acceptance tags may be removed only after confirming no
-container references them; retain the current accepted image and tag.
+diagnostic evidence. The former `/tmp/opencode/parakeet-test` fixture and the
+legacy `services/parakeet`/`parakeet-test` paths were removed with the completed
+2026-10-21 STT retirement. Superseded trial/acceptance tags may be removed only
+after confirming no container references them; retain the current accepted image
+and tag.
 
 ## Mobile acceptance evidence — 2026-10-21
 
