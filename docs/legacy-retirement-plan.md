@@ -1,19 +1,23 @@
 # Legacy STT retirement plan
 
-Status: **PREPARATION / READ-ONLY INVENTORY — NOT EXECUTED**  
-Prepared: 2026-10-21  
+Status: **CLIENTS ACCEPTED — READY FOR OWNER ROOT EXECUTION — NOT EXECUTED**
+Prepared: 2026-10-21
+Client acceptance: 2026-10-21 — owner explicitly confirmed the updated Loqui and
+HardAfanasii builds are installed and work as expected; Dart tasks
+`QUfX5DkfQlOp` and `rJXb45dp2zWg` are Done. Local agents are finalizing client
+commits; server deletion is still pending.
 Correction review: 2026-10-21 — Serve handler objects and exact nine image tags
-verified by primary; client builds still not installed/owner-accepted.
+verified by primary; primary independently re-ran the 8 unit tests and
+`--check` on `9eb8ec3`.
 Task: `NQf35XIvbfOf` (4scribe · retire old STT stack)  
-Repo: `/opt/40zen/repos/4scribe`, `main` = `d68594b` at preparation start  
+Repo: `/opt/40zen/repos/4scribe`, `main` = `9eb8ec3` at this update
 Scope owner: this document, `deployment/retire-legacy-stt.sh`, the repo
 allowlist, and a local-only append to
 `/opt/40zen/services/4scribe/RESOURCE-REGISTRY.md`.
 
-This plan retires the legacy Parakeet/Nemotron STT runtime **after** the
-HardAfanasii and Loqui client migrations are reviewed and accepted. It does not
-authorize deletion now. Both client tasks were still `Doing` when this inventory
-was taken.
+This plan retires the legacy Parakeet/Nemotron STT runtime. The client gate is
+now satisfied; no server deletion has been performed. Final execution remains
+an explicit owner root command using the existing reviewed script.
 
 ## Decision and gate
 
@@ -24,11 +28,23 @@ was taken.
   (`4scribe:accepted-enhancement-routefix-2026-10-21`), container
   `fourscribe-container`, host loopback `127.0.0.1:8093`, healthy WS/mobile/text,
   `FSCRIBE_KEEP_ALIVE_S=-1`.
-- **Deletion gate:** primary confirms reviewed client acceptance for
-  HardAfanasii (`QUfX5DkfQlOp`) and Loqui (`rJXb45dp2zWg`). Neither client is
-  claimed gone merely because its code task is in progress.
-- The script also requires `--clients-accepted` and
-  `RETIRE_LEGACY_STT=YES`. There is no automatic or scheduled execution.
+- **Client gate:** satisfied 2026-10-21. Owner confirmed both updated clients
+  are installed and work as expected; Dart tasks `QUfX5DkfQlOp` and
+  `rJXb45dp2zWg` are Done. Local agents are finalizing client commits; no server
+  deletion has occurred.
+- **Independent review:** primary reviewed `9eb8ec3`, re-ran the 8 stdlib unit
+  tests and `--check`, and confirmed the selected live Docker inventory
+  (containers, mounts, network) and exact nine image tags. Readable live Compose
+  references show `stt.env` only for the Parakeet engine + wrapper and
+  `parakeet-mobile.env` only for the wrapper. Unrelated Coolify artifact/root
+  paths were inaccessible, so this is not a universal negative; no key values
+  were read.
+- **OpenClaw:** owner confirmed it is not a consumer.
+- **Execution gate:** owner runs the existing reviewed command:
+  `sudo env RETIRE_LEGACY_STT=YES
+  /opt/40zen/repos/4scribe/deployment/retire-legacy-stt.sh --execute
+  --clients-accepted`. The script also requires `--clients-accepted` and
+  `RETIRE_LEGACY_STT=YES`; there is no automatic or scheduled execution.
 
 ## Exact legacy inventory
 
@@ -103,11 +119,13 @@ repository wildcard, `--force`, prune, or broad image cleanup.
 | `/opt/40zen/secrets/stt.env` | `NEMO_SPEECH_HTTP_API_KEY`; engine + wrapper, and legacy smoke test | Bounded search found only legacy compose/README/smoke, historical docs/registry, and the historical `RESOURCE-SCAN`. No systemd or 4scribe live reference. |
 | `/opt/40zen/secrets/parakeet-mobile.env` | `MOBILE_STT_API_KEY`; legacy wrapper | Bounded search found only legacy wrapper compose and historical docs. |
 
-`opencode` cannot stat the secret directory, so file ownership/mode is
-unconfirmed here. Primary must confirm both are legacy-only before execution.
-If any other live consumer is found, do **not** delete that file; report it and
-keep the retirement partial. The 4scribe credential
-`/opt/40zen/secrets/4scribe.env` is separate and preserved.
+`opencode` cannot stat the secret directory. Primary's readable-config review
+found no non-legacy live Compose reference; unrelated Coolify artifact/root paths
+were inaccessible, so no universal negative is claimed and no key values were
+read. The reviewed root execution removes only these two exact paths. If the
+owner's execution output shows an unexpected consumer or path mismatch, stop and
+retain that file rather than broadening deletion. The separate
+`/opt/40zen/secrets/4scribe.env` is preserved.
 
 ### Tailscale Serve (delete only two paths)
 
@@ -158,24 +176,23 @@ that every non-legacy handler is unchanged.
 
 ## Client and consumer gate
 
-| Consumer | Current contract | Gate before server deletion |
+| Consumer | Current contract | Acceptance |
 | --- | --- | --- |
-| HardAfanasii Android | Optional legacy provider uses `/parakeet-test/api/mobile/transcribe?enhance=true`; 4scribe provider installed/accepted | Task `QUfX5DkfQlOp` reviewed: legacy option/route removed, saved selection migrates safely, 4scribe recording + Gemini still work, old mobile credential not reused |
-| Loqui | Remote adapter internal ID `40zen-parakeet` now serves 4scribe; preserve it. Legacy raw WS alias is being removed from client config | Task `rJXb45dp2zWg` reviewed: 4scribe URL/token/language/timestamps/two-source preserved, dedicated enhancement accepted, no legacy endpoint/credential |
+| HardAfanasii Android | Optional legacy provider used `/parakeet-test/api/mobile/transcribe?enhance=true`; 4scribe provider installed | **ACCEPTED 2026-10-21** — owner confirmed updated build installed/works; task `QUfX5DkfQlOp` Done |
+| Loqui | Remote adapter internal ID `40zen-parakeet` now serves 4scribe; preserve it | **ACCEPTED 2026-10-21** — owner confirmed updated build installed/works; task `rJXb45dp2zWg` Done |
 | Browser playground | `/parakeet-test/` temp UI | Owner authorized deletion; no replacement required |
 | OpenClaw | Confirmed **not** a consumer of this STT | Do not launch broad OpenClaw exploration or read its configs/secrets |
 | Standalone 4scribe text API / Loqui migration | Done and owner-accepted; public `/4scribe/v1/text/enhance` works after alias fix; two external clients remained 200 in latest accepted test | No new model/quality work in this task |
 | Optional cloud Gemini / OpenClaw audio | Not migrated | Separate optional task; out of scope and not a blocker |
 
-Do not claim any client migration complete until primary confirms it. As of the
-correction review, both local workers had finished edits/tests, but neither build
-was installed or owner-accepted; primary is reviewing both clients now. The
-`--clients-accepted` gate remains mandatory.
+Client acceptance is satisfied. Local agents are still finalizing client
+commits, but the installed builds were explicitly accepted by the owner. Server
+deletion remains pending the owner root command.
 
-## Execution plan (after review only)
+## Execution plan (owner root execution pending)
 
-`deployment/retire-legacy-stt.sh` implements this sequence. It is currently
-**not executed**.
+`deployment/retire-legacy-stt.sh` implements this sequence. It remains safe and
+unchanged; it is **not executed** by this preparation.
 
 1. **Preflight (read-only):**
    - 4scribe container image exactly `sha256:f313…474`, running/healthy, restart
@@ -313,6 +330,8 @@ append.
 - Read-only `tailscale serve status --json` parsed by
   `deployment/legacy_serve_guard.py pre` — passed against the actual handler
   object shape; no Serve mutation.
+- Primary independently re-ran the 8 unit tests and `--check` against `9eb8ec3`
+  and confirmed selected live Docker inventory and exact tags match.
 - `deployment/retire-legacy-stt.sh --check` — passed; local paths,
   symlink/mount guards, Compose lines and 4scribe accepted-image guards verified.
 - `--execute` without `RETIRE_LEGACY_STT=YES` — refused before any preflight.
@@ -321,16 +340,31 @@ append.
 - No Docker mutation, container stop/restart, Serve change, secret read, model
   call, cloud call or production authenticated request was made.
 
-## Open items for review
+## Post-execution documentation checklist (after root output)
 
-1. Primary confirms both client tasks are reviewed/accepted; otherwise do not
-   execute. Local edits/tests are finished, but builds are not yet
-   installed/owner-accepted.
-2. Primary confirms the two secret files have no non-legacy consumer and reports
-   their ownership; if uncertain, keep them and narrow the retirement.
+1. Record the owner command output, timestamp, 4scribe image/health/restart
+   count, and confirmation that no legacy resources remain.
+2. Update current routing/consumer inventory in
+   `/opt/40zen/docs/stt.md`, `tailscale.md`, `architecture.md`, `services.md`,
+   `hard-afanasii.md` and `recovery.md`; keep historical notes as history.
+3. Mark the old `services/parakeet` runbook historical; remove dead operational
+   commands without rewriting research history.
+4. Reconcile the local `RESOURCE-REGISTRY.md`: exact deleted paths/tags/routes,
+   postchecks, secret-path removal, client acceptance references, and statement
+   that no backup/rollback copy was created.
+5. Verify final Serve state has `/`, `/4scribe` and any unrelated pre-existing
+   handlers; no global reset. Verify 8090/8091 absent and 8093 healthy.
+6. Publish the doc-only outcome and close task `NQf35XIvbfOf` only after primary
+   accepts the root output and postchecks.
+
+## Remaining execution items
+
+1. Owner runs the reviewed root command:
+   `sudo env RETIRE_LEGACY_STT=YES /opt/40zen/repos/4scribe/deployment/retire-legacy-stt.sh --execute --clients-accepted`.
+2. Keep task `NQf35XIvbfOf` Doing until the root output and postchecks are
+   reviewed.
 3. Decide separately whether the non-runtime `NeMo-Speech.cpp` source checkout
    should also be removed; it is not part of this runtime retirement.
-4. Decide whether to remove the known `/tmp/opencode/parakeet-test` fixture in
-   the same execution (script currently does).
+4. The known `/tmp/opencode/parakeet-test` fixture is included in the script.
 
-**READY FOR RETIREMENT REVIEW** — preparation only; no live retirement performed.
+**READY FOR OWNER EXECUTION** — clients accepted; no live retirement performed.
