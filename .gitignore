@@ -16,6 +16,8 @@
 !/deployment/retire-host-runtime.sh
 !/deployment/cleanup-residual-scratch.sh
 !/deployment/container-acceptance.sh
+!/deployment/enhancement-candidate-smoke.sh
+!/deployment/promote-enhancement.py
 !/deployment/diagnostics/
 !/deployment/replay/
 /deployment/diagnostics/*

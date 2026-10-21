@@ -4,16 +4,26 @@ Scope: build the **current source** into a fresh image and prove the image-level
 runtime on a separate loopback port. This is not a deployment and does not touch
 `fourscribe-container`, the accepted image, Compose, routes or secrets.
 
-Current status:
+Current status (enhancement candidate):
 
-- **Local-dev integration: passed** (real M4A → ffmpeg → real Ollama
-  `frozenlab/qwen3-asr:1.7b`, Silero on, aligner disabled; see the 2026-10-21
-  section of the local-only resource registry).
-- **Container acceptance: passed on source `a34f8ef`: 137 image tests, health
-  and batch auth isolation; disposable container removed.**
-- Owner subsequently promoted the same accepted image as
-  `4scribe:accepted-2026-10-21`; batch isolation and Loqui WS handshake passed.
-  Real Qwen audio integration was a separate dev-host test, not image smoke.
+- **Container acceptance: passed on source `7717021`: 195 image tests**, real
+  ffmpeg, health + batch auth isolation on disposable `127.0.0.1:18095`;
+  container removed, image retained for review.
+- Candidate tag `4scribe:dev-acceptance-7717021`; BuildKit config/image ID
+  `sha256:006589f5e1a3c62363a8bd34e55d8f2be6e7ba90d1bd065a016ff4bfbdf7eac4`
+  (manifest-list digest `sha256:2f8903baf787e78e24778a01e16943bf10286b71c1cb3f0e75e07ea8f1e306c3`).
+  Acceptance log: `/tmp/4scribe-container-acceptance-7717021.log`.
+- That acceptance container used fake WS/mobile tokens only and did **not**
+  configure an enhancement token, so its health correctly reported enhancement
+  disabled (`unset`). The image's enhancement tests ran in the hermetic suite.
+- `deployment/enhancement-candidate-smoke.sh` is prepared to prove the
+  candidate's enhancement health/auth isolation on a disposable listener
+  (`18096`) with **fake** WS/mobile/enhancement tokens and no model call.
+- `deployment/promote-enhancement.py` is prepared for a guarded root-owner
+  promotion; it is **not executed** by this preparation.
+- Real Qwen audio integration was a separate dev-host test, not image smoke.
+  Mock/image auth tests do not prove model quality, and no production secret
+  was used by candidate acceptance.
 - `4scribe:dev-mobile` predates the final source/tests. Do **not** use it as
   evidence; the script builds a new `4scribe:dev-acceptance-<sha>` tag.
 
@@ -40,8 +50,8 @@ The script:
    `tests/test_trace_replay.py` (imports
    `deployment/replay/streaming_replay.py`, which is not copied into the image,
    and needs the external Loqui sidecar). Replay remains in the **host/dev**
-   suite and is not weakened or bundled into the STT image. On the current HEAD
-   the image scope is **137 passed**, including the real-ffmpeg WAV/M4A batch
+   suite and is not weakened or bundled into the STT image. On source `7717021`
+   the image scope is **195 passed**, including the real-ffmpeg WAV/M4A batch
    tests; requires `python-multipart`, `torch` and ffmpeg in the image;
 4. starts a disposable `--read-only` container on `127.0.0.1:18095` with fake
    tokens (`acceptance-*-0000000000`), `FSCRIBE_ALIGNER_ENABLED=0` and
@@ -61,6 +71,62 @@ run it separately with its sidecar available:
 PATH="$PWD/.dev-tools/ffmpeg-n9.0/bin:$PATH" \
   .venv/bin/python -m pytest tests/test_trace_replay.py -q
 ```
+
+## Enhancement candidate smoke (prepared, fake tokens only)
+
+This uses the already-built candidate image, does not build, does not touch the
+production container, and calls no model:
+
+```sh
+cd /opt/40zen/repos/4scribe
+./deployment/enhancement-candidate-smoke.sh
+```
+
+Defaults: candidate `4scribe:dev-acceptance-7717021`, disposable listener
+`127.0.0.1:18096`, fake WS/mobile/enhancement tokens, `--read-only` container,
+aligner/Silero disabled. It asserts pinned candidate image ID, enhancement
+health enabled/unlatched, mobile configured, enhancement `401` without a token
+and with WS/mobile tokens, enhancement token + invalid payload `422`, and the
+existing mobile token still passing auth (body-less `400/413`). It removes the
+container and leaves the image unchanged.
+
+## Guarded production promotion (prepared, NOT executed)
+
+Owner/root command after candidate review:
+
+```sh
+sudo python3 /opt/40zen/repos/4scribe/deployment/promote-enhancement.py
+```
+
+Pinned inputs: tested source `7717021`, candidate tag/ID above, previous
+production tag `4scribe:accepted-2026-10-21` / image
+`sha256:136387338841d76d58b155ae137a9c66f05a5820d8f882e2274bec20b3d07e84`,
+new unique tag `4scribe:accepted-enhancement-2026-10-21`.
+
+The script refuses unless source/inputs/container/compose match those pins and
+there are no established connections on `127.0.0.1:8093`. It then, entirely
+inside root memory/file access:
+
+- preserves existing `FSCRIBE_TOKEN`/`FSCRIBE_MOBILE_TOKEN` and only
+  appends/generates `FSCRIBE_ENHANCEMENT_TOKEN` if absent (validated distinct,
+  non-placeholder, ≥16 chars); never prints or passes a secret on argv;
+- updates only the runtime compose image tag, accepted-image label and
+  `FSCRIBE_KEEP_ALIVE_S="-1"`, preserving host networking, non-root/read-only
+  runtime, cache mount, tmpfs, stop/health settings;
+- recreates the compose service and requires health to show aligner + Silero +
+  mobile + enhancement configured, then checks enhancement auth isolation,
+  existing mobile auth and the WS handshake;
+- writes a non-secret receipt
+  `/opt/40zen/services/4scribe/deployment/promotion-receipt-enhancement-2026-10-21.json`;
+- on post-restart failure restores the previous runtime compose and recreates
+  the previous accepted image. The previous tag/image is retained; a newly
+  provisioned enhancement token remains in the root-0600 env file (no secret
+  backup). New tag is never confused with the live accepted tag.
+
+This preparation does not restart, deploy, read production secrets, change
+Ollama/systemd/model lists, or switch Loqui. Legacy `parakeet-test` remains the
+active client enhancement dependency until the separate Loqui endpoint/key
+migration is accepted.
 
 ## Optional real batch smoke (not part of the script)
 

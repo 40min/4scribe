@@ -165,6 +165,28 @@ the server makes no automatic Ollama reload/probe, speculative retry or
 scheduler decision. This is intentionally fail-closed rather than silently
 stacking orphan generations.
 
+## Deployment status (prepared, not live)
+
+- Enhancement candidate source `7717021` passed the hermetic image suite
+  (195 tests) and disposable batch health/auth acceptance on
+  `4scribe:dev-acceptance-7717021`. That is **mock/image evidence**, not proof
+  of real correction quality or a real model request.
+- A disposable fake-token smoke can verify the candidate's enhancement health
+  and auth isolation without a model call. A single synthetic real enhancement
+  request remains an optional bounded owner smoke; it must not gate cutover on
+  exact model wording and must retain the raw transcript on any failure.
+- Guarded root promotion is prepared in
+  `deployment/promote-enhancement.py`; it is not executed as part of this
+  review. It pins the candidate image/source, preserves existing keys, adds
+  only a missing dedicated enhancement key, retains the previous image, and
+  rolls back runtime compose/image on post-restart check failure.
+- Live use still requires the owner promotion plus the separate Loqui endpoint
+  and key migration. Loqui is not switched by this work and legacy
+  `parakeet-test` remains active. There is no auto-recovery from the
+  unknown-completion latch: safe recovery is an explicit service restart after
+  the operator has allowed the bounded upstream budget or confirmed Ollama is
+  idle; no auto-probe/reload/retry is performed.
+
 ## Out of scope
 
 No batch/realtime inline enhancement, no language/glossary/new-model
