@@ -103,7 +103,8 @@ def make_real_upstream_app(cfg):
 
 
 @asynccontextmanager
-async def chat_server(*, first_delay=0.0, first_close=False, later_delay=0.0):
+async def chat_server(*, first_delay=0.0, first_close=False, later_delay=0.0,
+                      trickle_interval=None):
     """Tiny real local HTTP server with controllable generation timing.
 
     It reads the full request body before simulating generation. A client
@@ -141,11 +142,21 @@ async def chat_server(*, first_delay=0.0, first_close=False, later_delay=0.0):
                 "done_reason": "stop",
                 "eval_count": 5,
             }).encode()
-            writer.write(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
-                b"Content-Length: " + str(len(encoded)).encode() +
-                b"\r\nConnection: close\r\n\r\n" + encoded)
-            await writer.drain()
+            head = (b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                    b"Content-Length: " + str(len(encoded)).encode() +
+                    b"\r\nConnection: close\r\n\r\n")
+            if trickle_interval is not None and number == 1:
+                # Slow trickle: each gap is shorter than a typical httpx
+                # inactivity timeout, but the whole body exceeds wall budget.
+                writer.write(head)
+                await writer.drain()
+                for offset in range(0, len(encoded), 5):
+                    writer.write(encoded[offset:offset + 5])
+                    await writer.drain()
+                    await asyncio.sleep(trickle_interval)
+            else:
+                writer.write(head + encoded)
+                await writer.drain()
         except (ConnectionError, asyncio.IncompleteReadError):
             pass
         finally:
@@ -689,6 +700,61 @@ def test_real_exhausted_upstream_budget_latches_unknown_completion():
     assert second.status_code == 503
     assert second.json() == {"error": {"code": "enhancement_unavailable"}}
     assert state["started"] == 1, "latched endpoint must not start new work"
+
+
+def test_slow_trickle_is_cut_by_wall_clock_budget_and_latches():
+    """Tiny chunks inside httpx inactivity limits must still hit wall clock."""
+    async def scenario():
+        async with chat_server(trickle_interval=0.1, later_delay=0.0) as (
+                _server, port, _started, _finished, state):
+            cfg = Config(
+                token=WS_TOKEN, mobile_token=MOBILE_TOKEN,
+                enhancement_token=ENH_TOKEN,
+                ollama_url=f"http://127.0.0.1:{port}",
+                enhancement_deadline_s=3.0,
+                enhancement_upstream_timeout_s=0.2, silero_enabled=False)
+            app = make_real_upstream_app(cfg)
+            enhancer = app.state.text_enhancer
+            async with app_client(app) as client:
+                began = time.monotonic()
+                first = await client.post(PATH, headers=AUTH,
+                                          json={"text": "первый"})
+                elapsed = time.monotonic() - began
+                latched = enhancer._completion_unknown
+                second = await client.post(PATH, headers=AUTH,
+                                           json={"text": "второй"})
+                return first, elapsed, latched, second, state
+
+    first, elapsed, latched, second, state = asyncio.run(scenario())
+    assert first.status_code == 503
+    assert first.json() == {"error": {"code": "enhancement_unavailable"}}
+    assert elapsed < 1.0, "wall-clock budget must beat the multi-second trickle"
+    assert latched, "exhausted wall-clock budget means unknown completion"
+    assert second.status_code == 503
+    assert state["started"] == 1, "latched endpoint must not admit second work"
+
+
+def test_slow_trickle_within_wall_budget_still_succeeds():
+    async def scenario():
+        async with chat_server(trickle_interval=0.02, later_delay=0.0) as (
+                _server, port, _started, _finished, _state):
+            cfg = Config(
+                token=WS_TOKEN, mobile_token=MOBILE_TOKEN,
+                enhancement_token=ENH_TOKEN,
+                ollama_url=f"http://127.0.0.1:{port}",
+                enhancement_deadline_s=3.0,
+                enhancement_upstream_timeout_s=2.0, silero_enabled=False)
+            app = make_real_upstream_app(cfg)
+            async with app_client(app) as client:
+                resp = await client.post(PATH, headers=AUTH,
+                                         json={"text": "тест"})
+                return resp, app.state.text_enhancer._completion_unknown
+
+    resp, latched = asyncio.run(scenario())
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "unchanged"
+    assert resp.json()["text"] == "тест"
+    assert latched is False
 
 
 def test_shutdown_is_bounded_closes_client_and_consumes_tasks():

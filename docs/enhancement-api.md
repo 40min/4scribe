@@ -19,7 +19,7 @@ the batch endpoint, the glossary, deployment or the legacy service.
 | Text limit | 4 000 characters, rejected (never truncated) |
 | Raw body limit | 32 KiB measured on the streamed bytes (Content-Length is advisory) |
 | Client deadline | 5 s total, including slow upload/body read and waiting for the response |
-| Upstream budget | separate finite 60 s cap for the submitted Ollama call |
+| Upstream budget | separate finite 60 s **wall-clock** cap for the whole submitted Ollama call |
 | Admission | one active enhancement, no queue; a second concurrent request gets `429` |
 | Upstream response cap | 512 KiB streamed bytes |
 
@@ -127,9 +127,14 @@ Known limitations of the migrated behaviour (documented, not fixed here):
   task does not add a scheduler.
 - The client response deadline and the upstream budget are **separate**. The
   client receives `504` at 5 s, but the submitted HTTP call keeps its own 60 s
-  timeout; the single admission slot remains held until that call actually
-  completes. Meanwhile new requests receive `429`. This prevents the client
-  timeout itself from looking like upstream completion.
+  **wall-clock** budget covering connect, request send and the full response
+  body (not merely an httpx per-operation/inactivity timeout). The single
+  admission slot remains held until that call actually completes. Meanwhile
+  new requests receive `429`. This prevents the client timeout itself from
+  looking like upstream completion.
+- If the wall-clock upstream budget is exhausted, the request is classified as
+  unknown native completion (the same fail-closed latch below); it is never
+  treated as if generation had finished.
 - A timeout or HTTP/client cancellation does **not** abort native Ollama
   generation. No retry loop or unbounded background task is created.
 - On a clean model response (including a guard/HTTP-status failure), admission

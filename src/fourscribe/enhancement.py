@@ -20,8 +20,9 @@ Guards (see docs/enhancement-api.md):
 - request body is capped while streaming at 32 KiB (Content-Length is only a
   hint) and text at 4000 characters, rejected rather than truncated;
 - upstream response is capped while streaming at 512 KiB;
-- the 5 s client deadline and the finite 60 s upstream call budget are
-  separate; a 504 keeps admission until the submitted call really completes;
+- the 5 s client deadline and the finite 60 s wall-clock upstream call budget
+  are separate; a 504 keeps admission until the submitted call really
+  completes;
 - a timeout/cancel does NOT cancel native Ollama generation. If transport
   loss leaves native completion unprovable, the endpoint latches unavailable
   (health `completion_unknown`) until an explicit service restart;
@@ -435,9 +436,16 @@ class TextEnhancer:
             "keep_alive": -1,
             "options": options,
         }
+        budget = max(timeout_s, 0.001)
         try:
-            status, raw = await self._bounded_post(
-                "/api/chat", body, max(timeout_s, 0.001))
+            # httpx.Timeout is per-operation/inactivity; enforce a real
+            # wall-clock cap around the whole submitted request as well.
+            status, raw = await asyncio.wait_for(
+                self._bounded_post("/api/chat", body, budget), timeout=budget)
+        except TimeoutError:
+            # The wall-clock budget was exhausted with the request submitted;
+            # native completion is not provable from the client cancellation.
+            raise UpstreamCompletionUnknown()
         except (httpx.ConnectTimeout, httpx.PoolTimeout):
             # No request reached the model, so no native work is outstanding.
             raise EnhanceError("enhancement_unavailable")

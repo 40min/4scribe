@@ -70,9 +70,10 @@ class Config:
     enhancement_token: str = ""
     enhancer_model: str = "qwen3:0.6b"
     enhancement_deadline_s: float = 5.0
-    # Separate finite budget for the submitted Ollama call. The 5 s client
-    # deadline can answer 504 while generation is still running; admission is
-    # retained until this upstream call actually completes.
+    # Separate wall-clock budget for the whole submitted Ollama call (not just
+    # an httpx inactivity timeout). The 5 s client deadline can answer 504
+    # while generation is still running; admission is retained until this
+    # upstream call completes or the budget latches unknown completion.
     enhancement_upstream_timeout_s: float = 60.0
 
     @classmethod
