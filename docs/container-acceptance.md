@@ -87,8 +87,10 @@ Defaults: candidate `4scribe:dev-acceptance-7717021`, disposable listener
 aligner/Silero disabled. It asserts pinned candidate image ID, enhancement
 health enabled/unlatched, mobile configured, enhancement `401` without a token
 and with WS/mobile tokens, enhancement token + invalid payload `422`, and the
-existing mobile token still passing auth (body-less `400/413`). It removes the
-container and leaves the image unchanged.
+existing mobile token still passing auth (body-less `400/413`). The enhancement
+checks run on both the public prefixed route and the ingress-stripped
+`/v1/text/enhance` alias. It removes the container and leaves the image
+unchanged.
 
 ## Guarded production promotion (prepared, NOT executed)
 
@@ -127,6 +129,40 @@ This preparation does not restart, deploy, read production secrets, change
 Ollama/systemd/model lists, or switch Loqui. Legacy `parakeet-test` remains the
 active client enhancement dependency until the separate Loqui endpoint/key
 migration is accepted.
+
+## Route-fix follow-up (prepared after promotion)
+
+Production is already on `4scribe:accepted-enhancement-2026-10-21`. The
+original `deployment/promote-enhancement.py` is a historical one-shot gate and
+**must not be rerun**: its predecessor/source pins intentionally describe the
+pre-enhancement state. Use this bounded delta for the route-fix candidate:
+
+1. Build and accept the fixed source with `deployment/container-acceptance.sh`
+   (new tag `4scribe:dev-acceptance-<fixsha>`, log under `/tmp`).
+2. Prove the candidate with fake tokens on both route spellings:
+   ```sh
+   IMAGE=4scribe:dev-acceptance-<fixsha> \
+   EXPECTED_IDS="<image ID from the build log>" \
+     ./deployment/enhancement-candidate-smoke.sh
+   ```
+3. Primary/root delta after review, with no secret change/rotation:
+   - require the live container to still be
+     `4scribe:accepted-enhancement-2026-10-21` and no established connection
+     on loopback:8093;
+   - tag the reviewed candidate as the new unique local tag
+     `4scribe:accepted-enhancement-routefix-2026-10-21`;
+   - change only the runtime compose service image tag and
+     `com.40zen.accepted-image` label (keep `FSCRIBE_KEEP_ALIVE_S: "-1"` and
+     all cache/non-root/read-only/network settings);
+   - recreate with
+     `docker compose -f /opt/40zen/services/4scribe/deployment/compose.yaml -p fourscribe up -d --no-build --force-recreate`;
+   - require health enhancement enabled/unlatched, `401` without a token on
+     **both** `/4scribe/v1/text/enhance` and `/v1/text/enhance`, then repeat the
+     Loqui settings save/chocolate test;
+   - on any failure restore the previous runtime compose and recreate
+     `4scribe:accepted-enhancement-2026-10-21`. Retain the previous tag/image.
+4. Do not switch Loqui, change ingress/Tailscale, or alter the root-0600 token
+   file in this delta. Commit/publish the canonical compose change separately.
 
 ## Optional real batch smoke (not part of the script)
 

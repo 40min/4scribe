@@ -12,7 +12,7 @@ the batch endpoint, the glossary, deployment or the legacy service.
 
 | Item | Value |
 | --- | --- |
-| Method / path | `POST /4scribe/v1/text/enhance` |
+| Method / path | `POST /4scribe/v1/text/enhance` (public) and `POST /v1/text/enhance` (same handler after ingress strips `/4scribe`) |
 | Auth | `Authorization: Bearer <FSCRIBE_ENHANCEMENT_TOKEN>` - a **dedicated** key |
 | Content type | `application/json` |
 | Body | `{"text": "<non-empty string>", "language": "auto" \| "ru" \| "en"}` |
@@ -22,6 +22,11 @@ the batch endpoint, the glossary, deployment or the legacy service.
 | Upstream budget | separate finite 60 s **wall-clock** cap for the whole submitted Ollama call |
 | Admission | one active enhancement, no queue; a second concurrent request gets `429` |
 | Upstream response cap | 512 KiB streamed bytes |
+
+The tailnet ingress strips the `/4scribe` prefix, so both route spellings are
+registered through the **same authenticated handler and admission slot**, like
+the batch and realtime APIs. The public Loqui settings URL stays
+`https://40zen.tail055a00.ts.net/4scribe/v1/text/enhance`.
 
 `language` defaults to `auto`. It is validated for the client contract but is
 not injected into the current prompt, exactly like the migrated corrector:
@@ -180,6 +185,12 @@ stacking orphan generations.
   review. It pins the candidate image/source, preserves existing keys, adds
   only a missing dedicated enhancement key, retains the previous image, and
   rolls back runtime compose/image on post-restart check failure.
+- Live production already has the enhancement image, but its ingress-stripped
+  `/v1/text/enhance` alias was missing. Source now registers both spellings;
+  the prepared bounded rebuild/re-promotion delta is documented in
+  `docs/container-acceptance.md`. The old one-shot promotion script must not
+  be rerun because its predecessor/source pins describe the pre-enhancement
+  state.
 - Live use still requires the owner promotion plus the separate Loqui endpoint
   and key migration. Loqui is not switched by this work and legacy
   `parakeet-test` remains active. There is no auto-recovery from the

@@ -26,6 +26,8 @@ from fourscribe.config import Config
 from tests.conftest import FakeAligner
 
 PATH = "/4scribe/v1/text/enhance"
+#: What the tailnet ingress sends after stripping the public `/4scribe` prefix.
+INGRESS_PATH = "/v1/text/enhance"
 WS_TOKEN = "ws-realtime-0000000000"
 MOBILE_TOKEN = "mobile-batch-0000000000"
 ENH_TOKEN = "enhancement-text-000000"
@@ -272,6 +274,61 @@ def test_wrong_and_shared_tokens_are_rejected_before_body():
             assert resp.status_code == 401
             assert resp.json() == {"error": {"code": "unauthorized"}}
     assert mock.requests == []
+
+
+def test_ingress_stripped_alias_has_identical_auth_and_contract():
+    """Ingress strips /4scribe; the unprefixed route must behave identically."""
+    app, _, _ = make_app(responder=_value(chat_response("Привет, мир.")))
+    with TestClient(app) as client:
+        for path in (PATH, INGRESS_PATH):
+            assert client.post(path, headers={"authorization": "Bearer nope"},
+                               json={"text": "тест"}).status_code == 401
+            assert client.post(path, headers=AUTH,
+                               json={"text": ""}).status_code == 422
+        prefixed = client.post(PATH, headers=AUTH, json={"text": "привет мир"})
+        stripped = client.post(INGRESS_PATH, headers=AUTH,
+                               json={"text": "привет мир"})
+    assert prefixed.status_code == stripped.status_code == 200
+    assert prefixed.json() == stripped.json() == {
+        "status": "corrected",
+        "text": "Привет, мир.",
+        "raw_text": "привет мир",
+        "enhanced_text": "Привет, мир.",
+    }
+
+
+def test_ingress_stripped_alias_shares_one_admission_slot():
+    started = None
+    release = None
+
+    async def blocking(_body):
+        started.set()
+        await release.wait()
+        return chat_response("готово")
+
+    app, mock, _ = make_app(responder=blocking)
+
+    async def scenario():
+        nonlocal started, release
+        started, release = asyncio.Event(), asyncio.Event()
+        async with app_client(app) as client:
+            first = asyncio.create_task(
+                client.post(PATH, headers=AUTH, json={"text": "первый"}))
+            await asyncio.wait_for(started.wait(), 5)
+            busy = await client.post(INGRESS_PATH, headers=AUTH,
+                                     json={"text": "второй"})
+            calls_while_busy = len(mock.requests)
+            release.set()
+            first_resp = await asyncio.wait_for(first, 5)
+            after = await client.post(INGRESS_PATH, headers=AUTH,
+                                      json={"text": "третий"})
+            return busy, calls_while_busy, first_resp, after
+
+    busy, calls, first_resp, after = asyncio.run(scenario())
+    assert busy.status_code == 429
+    assert calls == 1, "alias must use the same shared admission instance"
+    assert first_resp.status_code == 200
+    assert after.status_code == 200
 
 
 @pytest.mark.parametrize("token,reason", [
@@ -867,6 +924,13 @@ def test_realtime_and_batch_routes_are_unchanged_by_addition():
     app, _, _ = make_app()
     paths = {getattr(route, "path", None) for route in app.routes}
     assert PATH in paths
+    assert INGRESS_PATH in paths
+    endpoints = {getattr(route, "path", None): getattr(route, "endpoint", None)
+                 for route in app.routes}
+    prefixed, stripped = endpoints[PATH], endpoints[INGRESS_PATH]
+    assert prefixed.__self__ is stripped.__self__
+    assert prefixed.__func__ is stripped.__func__, \
+        "both routes must use the same authenticated handler/admission"
     assert "/4scribe/v1/audio/transcriptions" in paths
     assert "/v1/audio/transcriptions/realtime" in paths
     assert "/4scribe/v1/audio/transcriptions/realtime" in paths

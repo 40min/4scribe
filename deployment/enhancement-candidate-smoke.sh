@@ -13,7 +13,7 @@ NAME=${NAME:-4scribe-enh-smoke-$$}
 RT=acceptance-realtime-0000000000
 MOB=acceptance-mobile-0000000000
 ENH=acceptance-enhancement-0000000000
-EXPECTED_IDS="sha256:006589f5e1a3c62363a8bd34e55d8f2be6e7ba90d1bd065a016ff4bfbdf7eac4 sha256:2f8903baf787e78e24778a01e16943bf10286b71c1cb3f0e75e07ea8f1e306c3"
+EXPECTED_IDS=${EXPECTED_IDS:-"sha256:006589f5e1a3c62363a8bd34e55d8f2be6e7ba90d1bd065a016ff4bfbdf7eac4 sha256:2f8903baf787e78e24778a01e16943bf10286b71c1cb3f0e75e07ea8f1e306c3"}
 
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
@@ -66,21 +66,23 @@ assert h.get("mobile_batch") == {"enabled": True, "reason": "ok"}, h
 PY
 
 code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
-base="http://127.0.0.1:$PORT/4scribe/v1/text/enhance"
-NOAUTH=$(code -X POST -H 'Content-Type: application/json' -d '{"text":""}' "$base")
-WSAUTH=$(code -X POST -H "Authorization: Bearer $RT" -H 'Content-Type: application/json' -d '{"text":""}' "$base")
-MOBAUTH=$(code -X POST -H "Authorization: Bearer $MOB" -H 'Content-Type: application/json' -d '{"text":""}' "$base")
-ENHBODY=$(curl -s -X POST -H "Authorization: Bearer $ENH" -H 'Content-Type: application/json' -d '{"text":""}' "$base")
+for route in /4scribe/v1/text/enhance /v1/text/enhance; do
+  base="http://127.0.0.1:$PORT$route"
+  NOAUTH=$(code -X POST -H 'Content-Type: application/json' -d '{"text":""}' "$base")
+  WSAUTH=$(code -X POST -H "Authorization: Bearer $RT" -H 'Content-Type: application/json' -d '{"text":""}' "$base")
+  MOBAUTH=$(code -X POST -H "Authorization: Bearer $MOB" -H 'Content-Type: application/json' -d '{"text":""}' "$base")
+  ENHBODY=$(curl -s -X POST -H "Authorization: Bearer $ENH" -H 'Content-Type: application/json' -d '{"text":""}' "$base")
+  printf '%s noauth=%s ws-token=%s mobile-token=%s enh-invalid=%s\n' \
+    "$route" "$NOAUTH" "$WSAUTH" "$MOBAUTH" "$ENHBODY"
+  [ "$NOAUTH" = 401 ] || { echo "FAIL: $route no-auth not 401" >&2; exit 1; }
+  [ "$WSAUTH" = 401 ] || { echo "FAIL: $route accepted WS token" >&2; exit 1; }
+  [ "$MOBAUTH" = 401 ] || { echo "FAIL: $route accepted mobile token" >&2; exit 1; }
+  [ "$ENHBODY" = '{"error":{"code":"invalid_input"}}' ] || {
+    echo "FAIL: $route token/invalid payload check failed" >&2; exit 1; }
+done
 BATCH=$(code -X POST -H "Authorization: Bearer $MOB" \
   "http://127.0.0.1:$PORT/4scribe/v1/audio/transcriptions")
-
-printf 'enhance-noauth=%s ws-token=%s mobile-token=%s enh-invalid=%s mobile-batch=%s\n' \
-  "$NOAUTH" "$WSAUTH" "$MOBAUTH" "$ENHBODY" "$BATCH"
-[ "$NOAUTH" = 401 ] || { echo "FAIL: enhancement no-auth not 401" >&2; exit 1; }
-[ "$WSAUTH" = 401 ] || { echo "FAIL: WS token accepted by enhancement" >&2; exit 1; }
-[ "$MOBAUTH" = 401 ] || { echo "FAIL: mobile token accepted by enhancement" >&2; exit 1; }
-[ "$ENHBODY" = '{"error":{"code":"invalid_input"}}' ] || {
-  echo "FAIL: enhancement token/invalid payload check failed" >&2; exit 1; }
+printf 'mobile-batch=%s\n' "$BATCH"
 [ "$BATCH" = 400 ] || [ "$BATCH" = 413 ] || {
   echo "FAIL: existing mobile token no longer passes auth" >&2; exit 1; }
 

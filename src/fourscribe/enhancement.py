@@ -1,4 +1,8 @@
-"""Standalone text correction endpoint for Loqui (POST /4scribe/v1/text/enhance).
+"""Standalone text correction endpoint for Loqui.
+
+Public route: POST /4scribe/v1/text/enhance. The ingress strips `/4scribe`, so
+the same authenticated handler/admission is also registered as
+POST /v1/text/enhance (matching batch/realtime).
 
 This is a behaviour-preserving port of the existing parakeet-test text
 enhancer. The corrector prompt, Ollama options, response guards and public
@@ -47,7 +51,12 @@ except Exception:  # pragma: no cover - defensive import only
 
 logger = logging.getLogger("fscribe.enhancement")
 
-TEXT_ENHANCE_PATHS = ("/4scribe/v1/text/enhance",)
+#: Public prefixed route plus the unprefixed alias the ingress calls after it
+#: strips `/4scribe` (same pattern as the batch and realtime routes).
+TEXT_ENHANCE_PATHS = (
+    "/4scribe/v1/text/enhance",
+    "/v1/text/enhance",
+)
 
 ENHANCER_MODEL_DEFAULT = "qwen3:0.6b"
 ENHANCER_SYSTEM_PROMPT = (
