@@ -1,11 +1,11 @@
 # 4scribe
 
-Local streaming speech-to-text for Loqui. Python/FastAPI serves revisable partial
+Local speech-to-text for Loqui streaming and HardAfanasii batch requests. Python/FastAPI serves revisable partial
 transcripts, completed segments and word timestamps using Qwen3-ASR through
 Ollama and Qwen3-ForcedAligner on CPU. English or Russian is selected per session.
 
-This preserves the current implementation, not a portable production-ready
-release. Latency and noise-triggered hallucinations remain under investigation.
+This documents the accepted 40zen deployment; portability and broader audio
+quality remain subject to validation.
 
 ## Layout
 
@@ -13,8 +13,7 @@ release. Latency and noise-triggered hallucinations remain under investigation.
 - `tests`: synthetic/mock protocol and regression tests; literal tokens are dummy credentials.
 - `deployment/smoke_wss.py`: authenticated streaming smoke test.
 - `deployment/compose.yaml`: accepted active container runtime.
-- `deployment/retire-host-runtime.sh`: guarded owner/root removal of the obsolete host runtime.
-- `deployment/cleanup-residual-scratch.sh`: exact-path owner/root cleanup of residual historical scratch.
+- `deployment/cleanup-final-leftovers.sh`: historical cleanup draft; stale image guards require review before use.
 - `docs/container-permanent.md`: current container operations and host retirement status.
 - `docs/backend-eval-manifest-2026-10-16.md`: preserved public backend-eval versions/fixture provenance.
 - `deployment/diagnostics`: standalone synthetic lifecycle diagnostic harness.
@@ -35,7 +34,8 @@ appropriate package index. The tested Ollama package is the third-party Q8_0
 from a pre-provisioned local Hugging Face cache. Model licenses apply separately.
 
 Installation and maintenance use the container image and Compose definition; see
-`docs/container-permanent.md`. The host virtualenv and systemd service are retired.
+`docs/container-permanent.md`. The host production virtualenv and systemd service
+are retired. An ignored development-only `.venv` is maintained in the repo.
 
 Environment-driven startup rejects the dummy `test-token` default. TLS/ingress
 and service management are deployment responsibilities. WebSocket paths:
@@ -54,14 +54,23 @@ A host-specific pipeline diagnostic and its dependent test remain local-only.
 
 ## Container deployment (active)
 
-`fourscribe-container` serves `127.0.0.1:8093` using the accepted image
-`sha256:7708a83bff51186ec273612b63fe6e6575fb46971e49e74a5c226610791e6517`
-(tag `4scribe:accepted-2026-10-19`). Owner live acceptance was confirmed on
-2026-10-20. The host unit and obsolete virtualenv were removed; residual
-historical scratch cleanup is pending an exact-path owner/root script. Host
-rollback is retired; future fixes use containers. The root-owned external env
-file, read-only aligner cache, external Ollama and Tailscale route remain in use.
-See `docs/container-permanent.md`.
+`fourscribe-container` serves `127.0.0.1:8093` using image
+`sha256:136387338841d76d58b155ae137a9c66f05a5820d8f882e2274bec20b3d07e84`
+(tag `4scribe:accepted-2026-10-21`, accepted source `a34f8ef`). Owner promotion
+confirmed batch token isolation and the Loqui WebSocket handshake. HardAfanasii's
+optional 4scribe provider was implemented, tested and deployed by the owner.
+
+Batch requests use `POST /4scribe/v1/audio/transcriptions`, multipart field
+`file`, and the separate `FSCRIBE_MOBILE_TOKEN`. The WebSocket token
+`FSCRIBE_TOKEN` is unchanged. Batch performs no text enhancement. See
+`docs/mobile-batch-api.md` for limits and response fields.
+
+Source/development checkout: `/opt/40zen/repos/4scribe`. Runtime Compose and the
+read-only model cache remain under `/opt/40zen/services/4scribe`; credentials
+remain in the external root-only `/opt/40zen/secrets/4scribe.env`. Host rollback
+is retired. The legacy `parakeet-test` service still supplies Loqui text
+enhancement and must not be removed as part of the mobile migration. See
+`docs/container-permanent.md` for operations and pending cleanup boundaries.
 
 Pre-decode speech verification uses pinned `silero-vad==6.2.3` (MIT, bundled
 JIT model). Env-driven startup enables it by default; disable with

@@ -9,7 +9,11 @@ Current status:
 - **Local-dev integration: passed** (real M4A → ffmpeg → real Ollama
   `frozenlab/qwen3-asr:1.7b`, Silero on, aligner disabled; see the 2026-10-21
   section of the local-only resource registry).
-- **Container acceptance: pending primary execution of this script.**
+- **Container acceptance: passed on source `a34f8ef`: 137 image tests, health
+  and batch auth isolation; disposable container removed.**
+- Owner subsequently promoted the same accepted image as
+  `4scribe:accepted-2026-10-21`; batch isolation and Loqui WS handshake passed.
+  Real Qwen audio integration was a separate dev-host test, not image smoke.
 - `4scribe:dev-mobile` predates the final source/tests. Do **not** use it as
   evidence; the script builds a new `4scribe:dev-acceptance-<sha>` tag.
 

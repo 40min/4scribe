@@ -5,7 +5,7 @@ name: fourscribe
 
 services:
   fourscribe:
-    image: 4scribe:accepted-2026-10-19
+    image: 4scribe:accepted-2026-10-21
     pull_policy: never
     container_name: fourscribe-container
     restart: unless-stopped
@@ -74,4 +74,4 @@ services:
       com.40zen.service: "4scribe"
       com.40zen.deployment: "container"
       com.40zen.host-unit: "fourscribe.service"
-      com.40zen.accepted-image: "sha256:7708a83bff51186ec273612b63fe6e6575fb46971e49e74a5c226610791e6517"
+      com.40zen.accepted-image: "sha256:136387338841d76d58b155ae137a9c66f05a5820d8f882e2274bec20b3d07e84"

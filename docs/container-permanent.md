@@ -1,9 +1,19 @@
 # Accepted container operations
 
-As of 2026-10-20, `fourscribe-container` is active on host loopback port 8093.
-Owner live acceptance was confirmed that day. The accepted immutable image is
-`sha256:7708a83bff51186ec273612b63fe6e6575fb46971e49e74a5c226610791e6517`,
-with persistent local tag `4scribe:accepted-2026-10-19`.
+As of 2026-10-21, `fourscribe-container` is active on host loopback port 8093.
+The accepted immutable image is
+`sha256:136387338841d76d58b155ae137a9c66f05a5820d8f882e2274bec20b3d07e84`,
+with persistent local tag `4scribe:accepted-2026-10-21` (source `a34f8ef`).
+Promotion passed batch auth isolation and the Loqui WebSocket handshake. The
+owner confirmed HardAfanasii's optional 4scribe provider implemented, tested and
+deployed. Earlier Loqui live acceptance was confirmed on 2026-10-20.
+
+Development/source checkout: `/opt/40zen/repos/4scribe`. Active runtime Compose
+and cache remain under `/opt/40zen/services/4scribe`. Batch uses
+`/4scribe/v1/audio/transcriptions` and separate `FSCRIBE_MOBILE_TOKEN`; streaming
+keeps `FSCRIBE_TOKEN`. Both are external root-only env entries. Batch has no
+text enhancer. Legacy `parakeet-test` still serves Loqui enhancement: its removal
+requires a separate dependency migration.
 
 The container includes Python, the app, Silero VAD and forced aligner runtime.
 Its sole bind mount is `/opt/40zen/services/4scribe/model-cache/hf` → `/models/hf`
@@ -25,10 +35,10 @@ Expected health: `ok=true`, aligner `qwen3-forced-aligner-0.6b`, verifier
 `silero-vad-6.2.3`, word timestamps true. Health proves liveness, not an
 authenticated audio/decode session; owner live acceptance is separate evidence.
 
-Future fixes, dependency installation and tests use container images. Core mock
-checks can run using the README command. Use isolated candidate images for
-changed code and owner-accepted deployment; never install a replacement host
-virtualenv. Retained public smoke and replay utilities need their Python
+Production fixes use candidate container images and owner-accepted deployment.
+Development can use the authorized ignored repo `.venv` (~1.7 GB) and
+`.dev-tools` (~515 MB), including ffmpeg. These are development-only, not a
+replacement host service. Core image checks use the README command. Retained public smoke and replay utilities need their Python
 dependencies in a container and explicit read-only fixture mounts; owner
 recordings are not bundled. `container-trial.sh` retains its isolated public
 trial workflow using host Python stdlib helpers; fixture fetch and smoke run in
@@ -48,19 +58,36 @@ cutover/rollback tools and the obsolete local unit template were removed.
 Historical trial/plan records remain. The accepted container remains the only
 runtime; no model, image, secret or repo content was removed by host retirement.
 
-## Residual scratch cleanup (owner/root, pending)
+## Residual scratch cleanup: verified, final leftovers pending
 
-The reviewed exact-path cleanup for the remaining old evaluation/session scratch
-is `deployment/cleanup-residual-scratch.sh`. It first verifies the accepted
-healthy container and its sole read-only model-cache mount, rejects symlinks,
-mounts and live process references, then removes only the named historical
-scratch directories. It does not touch the container, image, model cache,
-secrets, repo, Loqui reference, private owner replay copies or the unknown
-parakeet test file.
+The owner executed `deployment/cleanup-residual-scratch.sh` on 2026-10-20. Its
+exact targets were re-checked on 2026-10-20 and are absent: `/tmp/4scribe-backend-eval`,
+the four `/tmp/4scribe-container-trial.*` directories, the two completion/
+handoff directories, `.codex-worker` and the empty `/var/lib/fourscribe-trace`.
+The historical `cleanup-residual-scratch.sh` and `retire-host-runtime.sh` are
+one-shot tools whose runs are complete; the final reviewed script removes them
+with the remaining named leftovers.
 
-```sh
-sudo /opt/40zen/services/4scribe/deployment/cleanup-residual-scratch.sh
-```
+`deployment/cleanup-final-leftovers.sh` is a stale historical draft: its image
+check predates the mobile promotion, and source/runtime paths have since split.
+Do not run it unchanged. Re-evaluate exact targets against the current image,
+mounts and active processes before deleting any remaining replay copies,
+experiments, backups or caches. The local-only resource registry records these
+pending candidates; it is not public documentation or an automatic deletion list.
 
-Private owner replay directories remain pending explicit owner proof because
-their originals could not be verified without reading private content.
+Justified final holds: `/tmp/opencode/parakeet-test/ru_test.wav` is the default
+RU fixture of `services/parakeet/scripts/smoke-test.sh`, not unidentified
+garbage; `deployment/PLAN.md`, `deployment/RESULT.json` and
+`deployment/real_aligner_check.py` are retained historical acceptance/
+diagnostic evidence. Superseded trial/acceptance tags may be removed only after confirming no
+container references them; retain the current accepted image and tag.
+
+## Mobile acceptance evidence — 2026-10-21
+
+Independent image acceptance on source `a34f8ef`: **137 tests passed**, including
+real ffmpeg WAV/M4A handling, plus isolated health/auth smoke. The disposable
+container was removed. Independent batch scope: **54 passed**. The full host/dev
+suite reported **167 passed**. Real Qwen RU/EN/auto and silence integration ran
+in the isolated development environment, not inside the acceptance container;
+these are distinct evidence scopes. No containerized real-Qwen campaign is
+claimed by the image/auth check.
