@@ -2,8 +2,8 @@
 
 As of 2026-10-21, `fourscribe-container` is active on host loopback port 8093.
 The accepted immutable image is
-`sha256:136387338841d76d58b155ae137a9c66f05a5820d8f882e2274bec20b3d07e84`,
-with persistent local tag `4scribe:accepted-2026-10-21` (source `a34f8ef`).
+`sha256:f313ab3a8c98696c611fc8ee88e0a9f8e858aad3f1d2442363fd27fb50daa474`,
+with persistent local tag `4scribe:accepted-enhancement-routefix-2026-10-21` (source `e9ca825`).
 Promotion passed batch auth isolation and the Loqui WebSocket handshake. The
 owner confirmed HardAfanasii's optional 4scribe provider implemented, tested and
 deployed. Earlier Loqui live acceptance was confirmed on 2026-10-20.
@@ -12,8 +12,8 @@ Development/source checkout: `/opt/40zen/repos/4scribe`. Active runtime Compose
 and cache remain under `/opt/40zen/services/4scribe`. Batch uses
 `/4scribe/v1/audio/transcriptions` and separate `FSCRIBE_MOBILE_TOKEN`; streaming
 keeps `FSCRIBE_TOKEN`. Both are external root-only env entries. Batch has no
-text enhancer. Legacy `parakeet-test` still serves Loqui enhancement: its removal
-requires a separate dependency migration.
+text enhancer. Loqui standalone enhancement has migrated to 4scribe. Legacy service retirement
+remains a separate consumer audit/removal step.
 
 The container includes Python, the app, Silero VAD and forced aligner runtime.
 Its sole bind mount is `/opt/40zen/services/4scribe/model-cache/hf` → `/models/hf`
@@ -91,3 +91,21 @@ suite reported **167 passed**. Real Qwen RU/EN/auto and silence integration ran
 in the isolated development environment, not inside the acceptance container;
 these are distinct evidence scopes. No containerized real-Qwen campaign is
 claimed by the image/auth check.
+
+## Standalone enhancement accepted — 2026-10-21
+
+Current source `e9ca825` passed **197 image tests** and **114 focused tests**;
+no new full host-suite result is claimed. Public endpoint:
+`https://40zen.tail055a00.ts.net/4scribe/v1/text/enhance`, using dedicated
+`FSCRIBE_ENHANCEMENT_TOKEN`. Both `/4scribe/v1/text/enhance` and
+`/v1/text/enhance` share one handler because ingress strips the prefix.
+The original `qwen3:0.6b` corrector is unchanged; raw text stays canonical.
+Client deadline is 5 seconds, upstream wall-clock budget 60 seconds, with
+fail-closed latch and explicit safe restart recovery. ASR model keep-alive is
+`-1` in canonical/runtime Compose. Inline batch/WS enhancement is not enabled.
+
+Owner-accepted Loqui meeting `4dd5a489` (15:46:31–15:47:21 UTC) made two
+external enhancement calls: HTTP 200, unchanged outputs of 110/105 characters.
+No errors, busy responses, timeouts, latch or container restarts were observed.
+This proves integration, not correction-quality improvement. Completed one-shot
+promotion scripts were removed; reusable candidate smoke/acceptance remain.

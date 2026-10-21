@@ -5,7 +5,7 @@ name: fourscribe
 
 services:
   fourscribe:
-    image: 4scribe:accepted-2026-10-21
+    image: 4scribe:accepted-enhancement-routefix-2026-10-21
     pull_policy: never
     container_name: fourscribe-container
     restart: unless-stopped
@@ -41,7 +41,7 @@ services:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       HF_HUB_DISABLE_TELEMETRY: "1"
-      FSCRIBE_KEEP_ALIVE_S: "300"
+      FSCRIBE_KEEP_ALIVE_S: "-1"
 
     # Port is explicit because FSCRIBE_PORT does not override uvicorn's CLI.
     # The graceful timeout is bounded best-effort unwinding only; SIGTERM is
@@ -74,4 +74,4 @@ services:
       com.40zen.service: "4scribe"
       com.40zen.deployment: "container"
       com.40zen.host-unit: "fourscribe.service"
-      com.40zen.accepted-image: "sha256:136387338841d76d58b155ae137a9c66f05a5820d8f882e2274bec20b3d07e84"
+      com.40zen.accepted-image: "sha256:f313ab3a8c98696c611fc8ee88e0a9f8e858aad3f1d2442363fd27fb50daa474"

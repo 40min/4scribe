@@ -6,7 +6,7 @@ corrector model, prompt, sampling options and response guards are unchanged.
 Prompt/model quality work is deliberately out of scope for this task.
 
 It is a text-only route. It does not touch audio upload, realtime sessions,
-the batch endpoint, the glossary, deployment or the legacy service.
+the batch endpoint or glossary. Legacy service retirement is separate.
 
 ## Contract
 
@@ -170,37 +170,21 @@ the server makes no automatic Ollama reload/probe, speculative retry or
 scheduler decision. This is intentionally fail-closed rather than silently
 stacking orphan generations.
 
-## Deployment status (prepared, not live)
+## Deployment status — accepted 2026-10-21
 
-- Enhancement candidate source `7717021` passed the hermetic image suite
-  (195 tests) and disposable batch health/auth acceptance on
-  `4scribe:dev-acceptance-7717021`. That is **mock/image evidence**, not proof
-  of real correction quality or a real model request.
-- A disposable fake-token smoke can verify the candidate's enhancement health
-  and auth isolation without a model call. A single synthetic real enhancement
-  request remains an optional bounded owner smoke; it must not gate cutover on
-  exact model wording and must retain the raw transcript on any failure.
-- Guarded root promotion is prepared in
-  `deployment/promote-enhancement.py`; it is not executed as part of this
-  review. It pins the candidate image/source, preserves existing keys, adds
-  only a missing dedicated enhancement key, retains the previous image, and
-  rolls back runtime compose/image on post-restart check failure.
-- Live production already has the enhancement image, but its ingress-stripped
-  `/v1/text/enhance` alias was missing. Source now registers both spellings;
-  the prepared bounded rebuild/re-promotion delta is documented in
-  `docs/container-acceptance.md`. The old one-shot promotion script must not
-  be rerun because its predecessor/source pins describe the pre-enhancement
-  state.
-- Live use still requires the owner promotion plus the separate Loqui endpoint
-  and key migration. Loqui is not switched by this work and legacy
-  `parakeet-test` remains active. There is no auto-recovery from the
-  unknown-completion latch: safe recovery is an explicit service restart after
-  the operator has allowed the bounded upstream budget or confirmed Ollama is
-  idle; no auto-probe/reload/retry is performed.
+Current source `e9ca825`, tag `4scribe:accepted-enhancement-routefix-2026-10-21`,
+image `sha256:f313ab3a8c98696c611fc8ee88e0a9f8e858aad3f1d2442363fd27fb50daa474`.
+**197 image tests** and **114 focused tests** passed; no new full host-suite
+result or improved model quality is claimed.
+
+Loqui public endpoint and dedicated key migration are accepted. Owner meeting
+`4dd5a489` (15:46:31–15:47:21 UTC) made two external HTTP 200 calls with unchanged
+outputs of 110/105 characters. No errors, busy responses, timeouts, latch or
+container restarts were observed. This proves integration; raw stays canonical.
+Completed one-shot promotion helpers were removed; reusable candidate smoke
+and container acceptance remain.
 
 ## Out of scope
 
-No batch/realtime inline enhancement, no language/glossary/new-model
-experiments, no Loqui migration, no deployment, routing, secrets or legacy
-service changes in this stage. A later task may reuse this corrector seam with
-raw-text fallback.
+Inline batch/WS enhancement flags and legacy service retirement are not done.
+No glossary/new-model work or automatic latch recovery is introduced.
