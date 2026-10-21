@@ -12,6 +12,10 @@
 **/*.pyo
 **/*.pyd
 
+# Local-only diagnostic harness and historical backups are never image content.
+tests/test_diag_units.py
+tests/*.bak
+
 # Development-only interpreter, static tools and dotenv stay out of the image.
 .venv
 .dev-tools

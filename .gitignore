@@ -15,6 +15,7 @@
 !/deployment/compose.yaml
 !/deployment/retire-host-runtime.sh
 !/deployment/cleanup-residual-scratch.sh
+!/deployment/container-acceptance.sh
 !/deployment/diagnostics/
 !/deployment/replay/
 /deployment/diagnostics/*
@@ -27,6 +28,7 @@
 !/docs/backend-eval-manifest-2026-10-16.md
 !/docs/mobile-batch-api.md
 !/docs/dev-environment.md
+!/docs/container-acceptance.md
 # Never track generated caches, credentials, model weights or recordings.
 **/__pycache__/
 *.py[cod]
