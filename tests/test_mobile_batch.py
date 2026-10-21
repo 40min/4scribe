@@ -713,6 +713,11 @@ def test_form_parts_are_closed_on_every_path(monkeypatch):
     real_close = batchmod.close_form
 
     def spy(form):
+        # handle()'s finally legitimately calls close_form(None); preserve the
+        # wrapped helper's no-op semantics and record only actual forms.
+        if form is None:
+            real_close(form)
+            return
         uploads = [value for _key, value in form.multi_items()
                    if not isinstance(value, str)]
         real_close(form)

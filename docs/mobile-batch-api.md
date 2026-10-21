@@ -109,11 +109,11 @@ value), otherwise `ru`/`en`. Nothing is translated or forced when omitted.
 
 ## Remaining deployment work (owner)
 
-1. **Image ffmpeg layer (still blocked).** `Dockerfile` remains owned by
-   another account and is not writable by this agent; no ownership or
-   filesystem change was attempted. Apply exactly this hunk before building
-   (it is the only new system dependency). Until then the image has no ffmpeg
-   and real uploads fail decode; the image is **not deployment-ready**.
+1. **Image ffmpeg layer (owner-applied).** `Dockerfile` is owned by `i40min`;
+   this agent cannot write it and does not change ownership. The primary
+   applied the minimal layer below in the working tree (that Dockerfile change
+   is not part of the batch commit). Rebuild and confirm `ffmpeg -version`
+   inside the image; image acceptance and deployment remain with the primary.
 
    ```dockerfile
    WORKDIR /app
@@ -160,9 +160,11 @@ value), otherwise `ru`/`en`. Nothing is translated or forced when omitted.
 `tests/test_mobile_batch.py` is hermetic (mock Ollama, fake aligner,
 deterministic converter stubs, real `python` subprocesses for the bounded-exec
 helper) and asserts the Kotlin parser's required field types literally,
-including numeric `enhancer_ms = 0`. One test uses the real `ffmpeg` binary on a
-locally generated WAV and is skipped when ffmpeg is absent; no model downloads
-and no private audio are involved.
+including numeric `enhancer_ms = 0`. Two tests use the real `ffmpeg` binary on
+locally generated fixtures (`test_real_ffmpeg_decodes_generated_wav`,
+`test_real_ffmpeg_rejects_malformed_container`) and are skipped when ffmpeg is
+absent; they are pending in the rebuilt image. No model downloads and no
+private audio are involved.
 
 ## Known limitations
 
