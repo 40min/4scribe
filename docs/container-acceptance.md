@@ -30,11 +30,15 @@ The script:
 1. builds `IMAGE=${IMAGE:-4scribe:dev-acceptance-$(git rev-parse --short HEAD)}`
    from the working tree;
 2. checks `ffmpeg -version` and imports inside the image;
-3. runs `pytest` with `--network none`, excluding only
-   `tests/test_aligner_cache.py` (needs the host read-only weight snapshot) and
-   the local-only `tests/test_diag_units.py`. On the current HEAD this is
-   **156 passed**, including the real-ffmpeg WAV/M4A batch tests; requires
-   `python-multipart`, `torch` and ffmpeg in the image;
+3. runs `pytest` with `--network none`, excluding the host-dependent suites:
+   `tests/test_aligner_cache.py` (host read-only weight snapshot),
+   `tests/test_diag_units.py` (local-only harness, not in the image) and
+   `tests/test_trace_replay.py` (imports
+   `deployment/replay/streaming_replay.py`, which is not copied into the image,
+   and needs the external Loqui sidecar). Replay remains in the **host/dev**
+   suite and is not weakened or bundled into the STT image. On the current HEAD
+   the image scope is **137 passed**, including the real-ffmpeg WAV/M4A batch
+   tests; requires `python-multipart`, `torch` and ffmpeg in the image;
 4. starts a disposable `--read-only` container on `127.0.0.1:18095` with fake
    tokens (`acceptance-*-0000000000`), `FSCRIBE_ALIGNER_ENABLED=0` and
    `FSCRIBE_SILERO_ENABLED=0`, waits for `/healthz`, and asserts:
@@ -45,6 +49,14 @@ The script:
 
 No model weights, production env file, production token or cloud service is
 used by the script. Health does not load models.
+
+Host/dev replay suite remains intact and is **not** part of image acceptance;
+run it separately with its sidecar available:
+
+```sh
+PATH="$PWD/.dev-tools/ffmpeg-n9.0/bin:$PATH" \
+  .venv/bin/python -m pytest tests/test_trace_replay.py -q
+```
 
 ## Optional real batch smoke (not part of the script)
 

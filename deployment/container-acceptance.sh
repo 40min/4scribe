@@ -44,12 +44,17 @@ docker run --rm --entrypoint ffmpeg "$IMAGE" -version | head -1
 docker run --rm --entrypoint python "$IMAGE" -c 'import python_multipart, fastapi, torch; print("python-multipart/fastapi/torch ok")'
 
 echo "== hermetic image tests (no model, no network) =="
-# test_aligner_cache needs the host read-only weight snapshot; test_diag_units
-# is a local-only harness that is intentionally not in the image.
+# Image scope deliberately excludes three host-dependent suites:
+# - test_aligner_cache: needs the host read-only weight snapshot;
+# - test_diag_units: local-only harness, intentionally not in the image;
+# - test_trace_replay: imports deployment/replay/streaming_replay.py (not copied
+#   into the image) and needs the external Loqui sidecar. It remains in the
+#   host/dev suite; Loqui is not bundled into the STT image for tests.
 docker run --rm --network none --entrypoint python "$IMAGE" \
   -m pytest tests -q -p no:cacheprovider \
   --ignore=tests/test_aligner_cache.py \
-  --ignore=tests/test_diag_units.py
+  --ignore=tests/test_diag_units.py \
+  --ignore=tests/test_trace_replay.py
 
 echo "== disposable health/auth smoke on 127.0.0.1:$PORT =="
 docker run -d --name "$NAME" --network host --read-only \
