@@ -12,9 +12,13 @@
 #   - the 4scribe container, image, model cache, ingress or credential
 #   - Tailscale root `/` Gateway or `/4scribe`
 #
-# Review deployment/legacy-retirement-plan.md before execution.
+# Review docs/legacy-retirement-plan.md before execution.
 
 set -euo pipefail
+
+SCRIPT_DIR=$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+readonly SCRIPT_DIR
+readonly SERVE_GUARD="$SCRIPT_DIR/legacy_serve_guard.py"
 
 readonly ACCEPTED_IMAGE='sha256:f313ab3a8c98696c611fc8ee88e0a9f8e858aad3f1d2442363fd27fb50daa474'
 readonly FSCRIBE_CONTAINER='fourscribe-container'
@@ -34,17 +38,19 @@ readonly LEGACY_SECRETS=(
   /opt/40zen/secrets/parakeet-mobile.env
 )
 
-# Exact tags only; no repository wildcards. Replace/extend this array from the
-# primary's bounded `docker image ls` inventory before execution. Preflight
-# refuses if any listed tag is absent, so a stale entry cannot silently delete
-# something else. Current documented/likely tags are listed below.
+# Exact tags only; no repository wildcards. Verified by primary's bounded
+# `docker image ls` inventory. Preflight refuses if any listed tag is absent, so
+# a stale entry cannot silently delete something else.
 readonly LEGACY_IMAGE_TAGS=(
-  'parakeet-test:latest'
+  'parakeet-stt:0.2.0-a12b237'
   'parakeet-stt:latest'
-  'parakeet-stt:0.2.0-99aa775'
+  'parakeet-stt:0.2.0-b809bbb'
+  'nemo-speech-runtime-cpu:0.2.0-a12b237'
   'nemo-speech-runtime-cpu:latest'
-  'nemo-speech-runtime-cpu:0.2.0-99aa775'
   'nemo-speech-runtime-cpu:0.2.0-b809bbb'
+  'parakeet-test:latest'
+  'parakeet-test:rollback-2026-10-14'
+  'parakeet-test:pre-mobile-20261007'
 )
 
 readonly LEGACY_SERVE_PATHS=(
@@ -355,58 +361,17 @@ PY
 
 serve_preflight() {
   command -v tailscale >/dev/null 2>&1 || die 'tailscale CLI not found'
+  [[ -f "$SERVE_GUARD" ]] || die "missing Serve guard: $SERVE_GUARD"
   tailscale serve status --json > "$TMPDIR_RUN/serve-pre.json" ||
     die 'cannot read Tailscale Serve status'
-  python3 - "$TMPDIR_RUN/serve-pre.json" <<'PY'
-import json
-import sys
-
-doc = json.load(open(sys.argv[1], encoding="utf-8"))
-web = doc.get("Web", {})
-hosts = [k for k in web if k.endswith(":443")]
-if len(hosts) != 1:
-    raise SystemExit(f"expected exactly one 443 Serve host, got {hosts}")
-handlers = web[hosts[0]].get("Handlers", {})
-expected = {
-    "/": "http://127.0.0.1:18789",
-    "/4scribe": "http://127.0.0.1:8093",
-    "/parakeet-test": "http://127.0.0.1:8091",
-    "/v1/audio/transcriptions/realtime":
-        "http://100.72.25.9:8090/v1/audio/transcriptions/realtime",
-}
-for path, target in expected.items():
-    if handlers.get(path) != target:
-        raise SystemExit(f"Serve {path} target changed: {handlers.get(path)!r}")
-if "443" not in doc.get("TCP", {}):
-    raise SystemExit("Serve TCP 443 entry is absent")
-PY
+  python3 "$SERVE_GUARD" pre "$TMPDIR_RUN/serve-pre.json"
 }
 
 serve_postcheck() {
   tailscale serve status --json > "$TMPDIR_RUN/serve-post.json" ||
     die 'cannot read post-retirement Serve status'
-  python3 - "$TMPDIR_RUN/serve-pre.json" "$TMPDIR_RUN/serve-post.json" <<'PY'
-import json
-import sys
-
-pre = json.load(open(sys.argv[1], encoding="utf-8"))
-post = json.load(open(sys.argv[2], encoding="utf-8"))
-legacy = {"/parakeet-test", "/v1/audio/transcriptions/realtime"}
-
-for host, config in pre.get("Web", {}).items():
-    handlers = config.get("Handlers", {})
-    for path in legacy:
-        handlers.pop(path, None)
-
-if pre != post:
-    raise SystemExit("Tailscale Serve changed beyond the two legacy paths")
-
-for host, config in post.get("Web", {}).items():
-    if host.endswith(":443"):
-        handlers = set(config.get("Handlers", {}))
-        if handlers != {"/", "/4scribe"}:
-            raise SystemExit(f"unexpected remaining Serve handlers: {sorted(handlers)}")
-PY
+  python3 "$SERVE_GUARD" post \
+    "$TMPDIR_RUN/serve-pre.json" "$TMPDIR_RUN/serve-post.json"
 }
 
 execute_preflight() {

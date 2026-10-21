@@ -2,6 +2,8 @@
 
 Status: **PREPARATION / READ-ONLY INVENTORY — NOT EXECUTED**  
 Prepared: 2026-10-21  
+Correction review: 2026-10-21 — Serve handler objects and exact nine image tags
+verified by primary; client builds still not installed/owner-accepted.
 Task: `NQf35XIvbfOf` (4scribe · retire old STT stack)  
 Repo: `/opt/40zen/repos/4scribe`, `main` = `d68594b` at preparation start  
 Scope owner: this document, `deployment/retire-legacy-stt.sh`, the repo
@@ -74,20 +76,25 @@ No broad `/tmp` scan is part of this plan.
 
 ### Containers, network, images (delete)
 
-| Resource | Ownership / exact facts | Pending primary metadata |
+| Resource | Ownership / exact facts | Verification |
 | --- | --- | --- |
-| container `parakeet-stt` | Compose project `parakeet`, image tag `parakeet-stt:latest`, port `100.72.25.9:8090 -> 8080`, one read-only Nemotron bind, `stt.env`, `restart: unless-stopped` | Exact image ID, labels, network endpoint list |
-| container `parakeet-test` | Compose project `parakeet-test`, image tag `parakeet-test:latest`, host network, loopback 8091, no mounts, `stt.env` + `parakeet-mobile.env` | Exact image ID, labels |
-| network `parakeet_default` | Default Compose bridge for `parakeet`; `parakeet-test` uses host network, so it should have no project network | Driver/ID and attached endpoints |
-| image `parakeet-stt:latest` | Legacy engine/wrapper | Exact ID/digest and any additional tags |
-| image `parakeet-test:latest` | Legacy wrapper | Exact ID/digest |
-| image `nemo-speech-runtime-cpu:*` | Base runtime used to build the wrapper; documented rollback tag `0.2.0-b809bbb`; build also tags `0.2.0-99aa775`/`latest` | Exact tag list; reconcile the script array |
-| image `parakeet-stt:0.2.0-99aa775` | Likely build tag for current runtime commit | Confirm present/absent |
+| container `parakeet-stt` | Compose project `parakeet`, image tag `parakeet-stt:latest`, port `100.72.25.9:8090 -> 8080`, one read-only Nemotron bind, `stt.env`, `restart: unless-stopped` | Primary verified labels, mount and `parakeet_default` membership; exact image ID resolved by script preflight |
+| container `parakeet-test` | Compose project `parakeet-test`, image tag `parakeet-test:latest`, host network, loopback 8091, no mounts, `stt.env` + `parakeet-mobile.env` | Primary verified labels, host network and no mounts; exact image ID resolved by script preflight |
+| network `parakeet_default` | Default Compose bridge for `parakeet`; `parakeet-test` uses host network, so it has no project network | Primary verified single legacy endpoint `parakeet-stt` |
+| image `parakeet-stt:0.2.0-a12b237` | Legacy engine/wrapper tag | Verified exact tag |
+| image `parakeet-stt:latest` | Legacy engine/wrapper tag | Verified exact tag |
+| image `parakeet-stt:0.2.0-b809bbb` | Legacy engine/wrapper rollback tag | Verified exact tag |
+| image `nemo-speech-runtime-cpu:0.2.0-a12b237` | Legacy base runtime tag | Verified exact tag |
+| image `nemo-speech-runtime-cpu:latest` | Legacy base runtime tag | Verified exact tag |
+| image `nemo-speech-runtime-cpu:0.2.0-b809bbb` | Documented legacy runtime rollback tag | Verified exact tag |
+| image `parakeet-test:latest` | Legacy wrapper tag | Verified exact tag |
+| image `parakeet-test:rollback-2026-10-14` | Legacy wrapper rollback tag | Verified exact tag |
+| image `parakeet-test:pre-mobile-20261007` | Legacy wrapper pre-mobile tag | Verified exact tag |
 
 No named Docker volumes are declared. The only engine bind is the Nemotron GGUF
 listed above; the TDT GGUF is on disk but not mounted by the current Compose.
-The script deletes only exact tags listed in `LEGACY_IMAGE_TAGS`; no repository
-wildcard and no `docker system prune`.
+The script deletes only these **nine exact tags** in `LEGACY_IMAGE_TAGS`; no
+repository wildcard, `--force`, prune, or broad image cleanup.
 
 ### Dedicated credential paths (delete paths only; never read values)
 
@@ -104,7 +111,12 @@ keep the retirement partial. The 4scribe credential
 
 ### Tailscale Serve (delete only two paths)
 
-Current read-only status on `40zen.tail055a00.ts.net:443`:
+Current read-only status on `40zen.tail055a00.ts.net:443`. Each handler value is
+an object with a `Proxy` string, not a bare string:
+
+```json
+{"Handlers": {"/4scribe": {"Proxy": "http://127.0.0.1:8093"}}}
+```
 
 | Path | Target | Action |
 | --- | --- | --- |
@@ -155,7 +167,10 @@ that every non-legacy handler is unchanged.
 | Standalone 4scribe text API / Loqui migration | Done and owner-accepted; public `/4scribe/v1/text/enhance` works after alias fix; two external clients remained 200 in latest accepted test | No new model/quality work in this task |
 | Optional cloud Gemini / OpenClaw audio | Not migrated | Separate optional task; out of scope and not a blocker |
 
-Do not claim any client migration complete until primary confirms it.
+Do not claim any client migration complete until primary confirms it. As of the
+correction review, both local workers had finished edits/tests, but neither build
+was installed or owner-accepted; primary is reviewing both clients now. The
+`--clients-accepted` gate remains mandatory.
 
 ## Execution plan (after review only)
 
@@ -189,8 +204,9 @@ Do not claim any client migration complete until primary confirms it.
    `/opt/40zen/secrets/parakeet-mobile.env` by exact path; no value is read.
 7. **Post-check:** 4scribe same image, healthy, same restart count; `/healthz`
    OK; 8090/8091 listeners absent; 8093 listener present; legacy containers,
-   network, image tags, directories, fixture and secret paths absent; Serve has
-   exactly `/` and `/4scribe`.
+   network, image tags, directories, fixture and secret paths absent; Serve
+   pre-minus-two-legacy-paths equals post, with `/` and `/4scribe` unchanged
+   and any unrelated pre-existing handlers preserved.
 
 Run modes:
 
@@ -289,8 +305,16 @@ append.
 ## Preparation tests
 
 - `bash -n deployment/retire-legacy-stt.sh` — passed.
-- `deployment/retire-legacy-stt.sh --check` — passed; local paths, symlink/mount
-  guards, Compose lines and 4scribe accepted-image guards verified.
+- `python3 -m unittest -v deployment/test_legacy_retirement.py` — 8 passed.
+  Synthetic fixtures exercise Serve handler-object shape (`{"Proxy": ...}`),
+  string-shape rejection, exact two-path removal, unrelated-route preservation,
+  rejection of added/removed unrelated routes, remaining-legacy rejection, exact
+  nine-tag inventory, and the corrected plan path.
+- Read-only `tailscale serve status --json` parsed by
+  `deployment/legacy_serve_guard.py pre` — passed against the actual handler
+  object shape; no Serve mutation.
+- `deployment/retire-legacy-stt.sh --check` — passed; local paths,
+  symlink/mount guards, Compose lines and 4scribe accepted-image guards verified.
 - `--execute` without `RETIRE_LEGACY_STT=YES` — refused before any preflight.
 - `--execute --clients-accepted` with confirmation but as non-root — refused
   before Docker/Tailscale access.
@@ -300,13 +324,13 @@ append.
 ## Open items for review
 
 1. Primary confirms both client tasks are reviewed/accepted; otherwise do not
-   execute.
-2. Primary supplies exact legacy image tags/IDs and network/label evidence.
-3. Primary confirms the two secret files have no non-legacy consumer and reports
-   their metadata; if uncertain, keep them and narrow the retirement.
-4. Decide separately whether the non-runtime `NeMo-Speech.cpp` source checkout
+   execute. Local edits/tests are finished, but builds are not yet
+   installed/owner-accepted.
+2. Primary confirms the two secret files have no non-legacy consumer and reports
+   their ownership; if uncertain, keep them and narrow the retirement.
+3. Decide separately whether the non-runtime `NeMo-Speech.cpp` source checkout
    should also be removed; it is not part of this runtime retirement.
-5. Decide whether to remove the known `/tmp/opencode/parakeet-test` fixture in
+4. Decide whether to remove the known `/tmp/opencode/parakeet-test` fixture in
    the same execution (script currently does).
 
 **READY FOR RETIREMENT REVIEW** — preparation only; no live retirement performed.
