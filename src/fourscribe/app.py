@@ -21,6 +21,7 @@ import concurrent.futures
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
@@ -28,6 +29,7 @@ from .aligner import get_aligner
 from .asr import OllamaChat
 from .batch import BATCH_HTTP_PATHS, BatchTranscriber
 from .config import Config
+from .enhancement import TEXT_ENHANCE_PATHS, TextEnhancer
 from .lifecycle_trace import new_session_tracer
 from .session import RealtimeSession
 from .verifier import get_verifier
@@ -108,7 +110,8 @@ class BoundedEventQueue:
         return len(self._q)
 
 
-def create_app(cfg: Config = None, http_factory=None, aligner=None, verifier=None):
+def create_app(cfg: Config = None, http_factory=None, aligner=None, verifier=None,
+               enhancement_http_factory=None):
     cfg_provided = cfg is not None
     cfg = cfg or Config.from_env()
     if not cfg_provided:
@@ -137,7 +140,22 @@ def create_app(cfg: Config = None, http_factory=None, aligner=None, verifier=Non
         max_workers=1, thread_name_prefix="fscribe-vad")
     align_sem = asyncio.Semaphore(cfg.aligner_workers)
     decode_sem = asyncio.Semaphore(cfg.inference_workers)
-    app = FastAPI(title="4scribe", version="0.1.0")
+
+    # Standalone text correction has its OWN single admission slot and async
+    # HTTP client; it never takes the ASR decode semaphore, so correction and
+    # transcription are not serialized by an application lock. The async client
+    # is created on startup and closed on shutdown, never at module import.
+    enhancer = TextEnhancer(cfg, client_factory=enhancement_http_factory)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        await enhancer.start()
+        try:
+            yield
+        finally:
+            await enhancer.close()
+
+    app = FastAPI(title="4scribe", version="0.1.0", lifespan=lifespan)
 
     # Mobile batch API (HardAfanasii). Reuses the app's executor, decode
     # semaphore and single-pool Silero verifier; disabled (503) unless a
@@ -148,12 +166,14 @@ def create_app(cfg: Config = None, http_factory=None, aligner=None, verifier=Non
     app.state.decode_pool = pool
     app.state.decode_sem = decode_sem
     app.state.verifier = verifier
+    app.state.text_enhancer = enhancer
 
     async def _healthz_impl():
         return {"ok": True, "aligner": aligner.name,
                 "verifier": verifier.name,
                 "word_timestamps": bool(aligner.available),
-                "mobile_batch": batch.status()}
+                "mobile_batch": batch.status(),
+                "text_enhancement": enhancer.status()}
 
     async def _readyz_impl():
         # light readiness: loopback Ollama reachable via /api/tags; no model warm-up
@@ -283,5 +303,10 @@ def create_app(cfg: Config = None, http_factory=None, aligner=None, verifier=Non
     # /parakeet-test URL is served or preserved here.
     for path in BATCH_HTTP_PATHS:
         app.post(path)(batch.handle)
+
+    # Separate standalone text-correction API (Loqui); no batch/session path
+    # or legacy /api/text/enhance alias is added here.
+    for path in TEXT_ENHANCE_PATHS:
+        app.post(path)(enhancer.handle)
 
     return app

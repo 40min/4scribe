@@ -63,6 +63,13 @@ class Config:
     # split at pauses into windows of at most this length (5..60 enforced).
     mobile_asr_window_s: float = 40.0
     mobile_ffmpeg_bin: str = "ffmpeg"
+    # Standalone text enhancement (Loqui), POST /4scribe/v1/text/enhance.
+    # Its Bearer is separate from both the realtime and mobile keys; empty or
+    # unsafe values keep the endpoint disabled (503) instead of falling back.
+    # The corrector itself is the behaviour-preserving qwen3:0.6b port.
+    enhancement_token: str = ""
+    enhancer_model: str = "qwen3:0.6b"
+    enhancement_deadline_s: float = 5.0
 
     @classmethod
     def from_env(cls):
@@ -87,4 +94,8 @@ class Config:
             mobile_max_duration_s=_float("FSCRIBE_MOBILE_MAX_DURATION_S", 61.0),
             mobile_asr_window_s=_float("FSCRIBE_MOBILE_ASR_WINDOW_S", 40.0),
             mobile_ffmpeg_bin=os.environ.get("FSCRIBE_MOBILE_FFMPEG_BIN") or "ffmpeg",
+            enhancement_token=(os.environ.get("FSCRIBE_ENHANCEMENT_TOKEN") or "").strip(),
+            enhancer_model=(os.environ.get("FSCRIBE_ENHANCER_MODEL")
+                            or "qwen3:0.6b"),
+            enhancement_deadline_s=_float("FSCRIBE_ENHANCEMENT_DEADLINE_S", 5.0),
         )

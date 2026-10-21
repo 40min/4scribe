@@ -29,6 +29,7 @@
 !/docs/mobile-batch-api.md
 !/docs/dev-environment.md
 !/docs/container-acceptance.md
+!/docs/enhancement-api.md
 # Never track generated caches, credentials, model weights or recordings.
 **/__pycache__/
 *.py[cod]
