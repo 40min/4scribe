@@ -17,6 +17,7 @@ import json
 import math
 import os
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -891,6 +892,43 @@ def test_real_ffmpeg_decodes_generated_wav(tmp_path):
                                       timeout_s=15)
     assert len(out) % 2 == 0
     assert abs(len(out) - len(pcm)) <= 16000 * 2 * 0.1  # <=100 ms boundary slack
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None,
+                    reason="ffmpeg absent (Docker image smoke runs this)")
+def test_real_ffmpeg_m4a_upload_end_to_end(monkeypatch, tmp_path):
+    """Encode synthetic speech to real M4A/AAC, then drive the full endpoint.
+
+    Covers the deployment-critical path that stubs cannot: ffmpeg's `mov`
+    demuxer, AAC decode to PCM16/16 kHz, the private spool, the 61 s gate and
+    the Kotlin numeric response contract. Uses only generated audio.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    pcm = speech_pcm(1.2)
+    wav_path = tmp_path / "synthetic.wav"
+    wav_path.write_bytes(wav_bytes(pcm))
+    m4a_path = tmp_path / "synthetic.m4a"
+    subprocess.run(
+        [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "wav", "-i", str(wav_path),
+         "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart",
+         str(m4a_path)],
+        check=True, timeout=30)
+    upload = m4a_path.read_bytes()
+    assert upload
+
+    cfg = Config(token=WS_TOKEN, mobile_token=MOBILE_TOKEN,
+                 ollama_url="http://mock-ollama", min_endpointing_ms=400,
+                 partial_interval_s=0.2, mobile_ffmpeg_bin=ffmpeg)
+    app, mock, _ = make_app(monkeypatch, cfg=cfg)
+    with TestClient(app) as client:
+        resp = client.post(PATH, headers=AUTH,
+                           files={"file": ("recording.m4a", upload, "audio/mp4")})
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert parse_like_kotlin(payload) == "Unforced test text."
+    assert abs(payload["audio_duration_ms"] - 1200) <= 150
+    assert mock.requests
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None,

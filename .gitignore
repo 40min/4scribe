@@ -26,6 +26,7 @@
 !/docs/container-permanent.md
 !/docs/backend-eval-manifest-2026-10-16.md
 !/docs/mobile-batch-api.md
+!/docs/dev-environment.md
 # Never track generated caches, credentials, model weights or recordings.
 **/__pycache__/
 *.py[cod]
@@ -37,6 +38,11 @@
 *.flac
 *.safetensors
 *.gguf
+
+# Local-only development environment and tools.
+/.venv/
+/.dev-tools/
+/.pytest_cache/
 
 # Local-only harness contains private host routing metadata.
 /deployment/diagnostics/diagnose_real_pipeline.py

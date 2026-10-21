@@ -13,6 +13,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Batch mobile uploads require M4A/WAV decoding; runtime stays non-root.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # Direct + critical transitive pins grounded in the host inventory
 # (docs/pip-freeze-2026-10-16-completion.txt). No full host freeze dump.
 COPY requirements-container.txt ./
