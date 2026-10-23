@@ -20,8 +20,15 @@ No Android code, route, ingress or deployment change is part of this stage.
 | Duration | decoded PCM <= 61 s (+0.1 s encoder tolerance), measured on the decoded samples |
 | Language | omitted or `auto` = automatic (no assistant prefill); explicit `ru` / `en` validated |
 
-Unknown fields (including the old `enhance` flag and `?enhance=true`) are
-accepted and ignored. There is no enhancer, glossary or post-correction call.
+Optional multipart enhance accepts exactly true or false (default false).
+When absent, the enhance query parameter is supported, like language.
+The multipart value takes precedence. Invalid values return 400 invalid_enhance
+before conversion/ASR. Other unknown fields remain ignored.
+
+Enabled correction runs on nonblank text after releasing ASR decode capacity,
+using the existing shared engine. No extra client request is needed. This
+requires the existing engine configuration (FSCRIBE_ENHANCEMENT_TOKEN);
+batch callers still authenticate using only the mobile token.
 
 ### Success (`200`)
 
@@ -41,9 +48,13 @@ accepted and ignored. There is no enhancer, glossary or post-correction call.
 ```
 
 `conversion_ms`, `stt_ms`, `enhancer_ms` and `server_total_ms` are always
-finite, non-negative numbers (never `null`); `enhancer_ms` is numeric `0`.
-`enhanced_text` is always `null`, so the client's "use enhanced only when
-filled and error-free" rule falls back to `text`. Empty/no-speech audio is a
+finite, non-negative numbers (never null). enhancer_ms is zero when skipped,
+otherwise measured correction attempt time. text always preserves raw ASR.
+Corrected output fills enhanced_text; unchanged output leaves it null with
+enhancer_error=false. Any correction failure (busy, timeout, unavailable or
+input too large) preserves HTTP 200 and raw text, leaves enhanced_text null
+and sets enhancer_error=true. server_total_ms includes optional correction.
+Blank/verifier-declined text skips correction. Empty/no-speech audio is a
 successful `200` with `"text": ""` - not an error.
 
 `language` reports the **requested mode**, not a detected language: `auto` when
@@ -160,7 +171,7 @@ value), otherwise `ru`/`en`. Nothing is translated or forced when omitted.
 `tests/test_mobile_batch.py` is hermetic (mock Ollama, fake aligner,
 deterministic converter stubs, real `python` subprocesses for the bounded-exec
 helper) and asserts the Kotlin parser's required field types literally,
-including numeric `enhancer_ms = 0`. Two tests use the real `ffmpeg` binary on
+including numeric enhancer_ms (zero when skipped). Two tests use the real `ffmpeg` binary on
 locally generated fixtures (`test_real_ffmpeg_decodes_generated_wav`,
 `test_real_ffmpeg_rejects_malformed_container`) and are skipped when ffmpeg is
 absent; they are pending in the rebuilt image. No model downloads and no
@@ -173,5 +184,5 @@ private audio are involved.
   word straddling a pause-free boundary is the only content risk (no tail loss).
 - ASR itself cannot be interrupted mid-call; the slot is retained until the
   worker returns (documented above).
-- No word timestamps (aligner is not called for batch), no enhancer, no cloud
+- No word timestamps (aligner is not called for batch), optional shared correction, no cloud
   fallback.

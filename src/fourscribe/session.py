@@ -44,6 +44,7 @@ monotonic = time.monotonic
 logger = logging.getLogger("fscribe")
 
 from . import events
+from .enhancement import EnhanceError
 from .aligner import AlignerUnavailable, AlignmentFault, validate_words
 from .asr import OllamaDecodeError
 from .vad_gate import SpeechGate
@@ -58,7 +59,12 @@ PREROLL_RING_S = 0.35  # samples kept to seed a segment at its exact onset frame
 class RealtimeSession:
     def __init__(self, cfg, asr, aligner, pool, sink, align_pool=None,
                  align_sem=None, decode_sem=None, tracer=None, verifier=None,
-                 vad_pool=None):
+                 vad_pool=None, enhancer=None, discard_enhancements=None):
+        self._discard_enhancements = discard_enhancements
+        self.enhancer = enhancer
+        self.enhance = False
+        self._enhancement_generation = 0
+        self._enhancement_tasks = set()
         self.cfg = cfg
         self.asr = asr
         self.aligner = aligner
@@ -462,6 +468,7 @@ class RealtimeSession:
     async def _finalize(self, pcm: bytes, end_abs: float, seg_start_abs: float,
                         is_commit: bool, jid: str = ""):
         gen = self.generation
+        enhancement = None
         async with self.decode_lock:
             text = ""
             if is_commit and not pcm:
@@ -501,7 +508,11 @@ class RealtimeSession:
                                            span_end_s=processed,
                                            n_aligned=len(mapped),
                                            align_status=(align_meta or {}).get("status"))
-                    self.emit(events.final_event(text, processed, mapped, align_meta))
+                    final = events.final_event(text, processed, mapped, align_meta)
+                    self.emit(final)
+                    if self.enhance:
+                        enhancement = (text, final["segment_id"], self.language,
+                                       self._enhancement_generation)
                     self.last_final_pos = processed
             else:
                 self.stats["declined_decode"] += 1
@@ -521,6 +532,9 @@ class RealtimeSession:
                     self.last_final_pos = None
                     self.epoch_start_samples = end_abs
 
+        if enhancement is not None:
+            self._schedule_enhancement(*enhancement)
+
     async def handle_commit(self):
         if self.closed:
             return
@@ -532,7 +546,48 @@ class RealtimeSession:
         self._gate.reset_state()
         self._admit_final(pcm, end_abs, seg_start_abs, True)
 
+    def _invalidate_enhancements(self):
+        self._enhancement_generation += 1
+        if self._discard_enhancements is not None:
+            self._discard_enhancements()
+        for task in self._enhancement_tasks:
+            task.cancel()
+
+    def _schedule_enhancement(self, text, segment_id, language, generation):
+        if not self.enhance or self.closed or generation != self._enhancement_generation:
+            return
+        if self._enhancement_tasks:
+            self.emit(events.enhanced_event(segment_id, None, True, 0,
+                                           "error", "enhancement_busy"))
+            return
+        task = asyncio.create_task(self._enhance_segment(
+            text, segment_id, language, generation))
+        self._enhancement_tasks.add(task)
+        task.add_done_callback(self._enhancement_tasks.discard)
+
+    async def _enhance_segment(self, text, segment_id, language, generation):
+        started = time.monotonic()
+        error = None
+        result = None
+        try:
+            if self.enhancer is None:
+                raise EnhanceError("enhancement_unavailable")
+            result = await self.enhancer.correct(text, language or "auto")
+        except asyncio.CancelledError:
+            return
+        except EnhanceError as failure:
+            error = failure.code
+        except Exception:
+            error = "enhancement_unavailable"
+        if self.closed or generation != self._enhancement_generation or not self.enhance:
+            return
+        self.emit(events.enhanced_event(
+            segment_id, result["enhanced_text"] if result else None, bool(error),
+            round((time.monotonic() - started) * 1000, 3),
+            result["status"] if result else "error", error))
+
     async def handle_cancel(self):
+        self._invalidate_enhancements()
         self.generation += 1  # late results are discarded on compute completion
         self.final_jobs.clear()  # cancel is an explicit abort of queued work
         self.commit_pending = False
@@ -540,7 +595,14 @@ class RealtimeSession:
     async def handle_session_update(self, payload):
         sess = (payload or {}).get("session") or {}
         applied = {}
-        err = None
+        invalid_enhance = "enhance" in sess and type(sess["enhance"]) is not bool
+        if not invalid_enhance and "enhance" in sess:
+            if self.enhance and not sess["enhance"]:
+                self._invalidate_enhancements()
+            self.enhance = sess["enhance"]
+        applied["enhance"] = self.enhance
+        err = ({"code": "invalid_enhance", "message": "enhance must be boolean"}
+               if invalid_enhance else None)
         sample_rate = sess.get("sample_rate")
         if sample_rate and sample_rate != self.cfg.sample_rate:
             err = {"code": "invalid_sample_rate", "message": "only 16 kHz PCM16 mono accepted"}
@@ -569,6 +631,7 @@ class RealtimeSession:
 
     async def close(self):
         self.closed = True
+        self._invalidate_enhancements()
         self.generation += 1  # late results after stop are void by generation guard
         self.commit_pending = False  # stop must not block anything afterwards
         if self.tracer:

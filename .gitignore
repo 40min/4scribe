@@ -32,6 +32,7 @@
 !/docs/dev-environment.md
 !/docs/container-acceptance.md
 !/docs/enhancement-api.md
+!/docs/realtime-enhancement.md
 # Never track generated caches, credentials, model weights or recordings.
 **/__pycache__/
 *.py[cod]

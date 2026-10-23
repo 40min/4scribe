@@ -323,8 +323,6 @@ class TextEnhancer:
             return _error("enhancement_busy")
         await self._slot.acquire()
         admitted = True
-        work = None
-        deferred_release = False
         started = time.monotonic()
         deadline = started + self.deadline_s
         try:
@@ -351,9 +349,34 @@ class TextEnhancer:
             if language not in LANGUAGES:
                 return _error("invalid_input")
 
+            admitted = False  # common correction path owns admission now
+            return JSONResponse(await self._correct_admitted(text, deadline))
+        except EnhanceError as failure:
+            return failure.response()
+        finally:
+            if admitted:
+                self._slot.release()
+
+    async def correct(self, text: str, language="auto"):
+        """Internal correction with shared admission, deadline and native-work guards."""
+        if not self.enabled or self._closing or self._completion_unknown:
+            raise EnhanceError("enhancement_unavailable")
+        if not isinstance(text, str) or not text.strip() or language not in LANGUAGES:
+            raise EnhanceError("invalid_input")
+        if len(text) > self.max_text_chars:
+            raise EnhanceError("input_too_large")
+        if self._slot.locked():
+            raise EnhanceError("enhancement_busy")
+        await self._slot.acquire()
+        return await self._correct_admitted(text, time.monotonic() + self.deadline_s)
+
+    async def _correct_admitted(self, text, deadline):
+        work = None
+        deferred_release = False
+        try:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return _error("enhancement_timeout")
+                raise EnhanceError("enhancement_timeout")
             await self.start()  # no-op after app startup; safe for bare ASGI use
             # The submitted call gets its OWN finite budget, longer than the
             # client response deadline. A 504 must not shorten the upstream
@@ -371,7 +394,7 @@ class TextEnhancer:
                 # HTTP deadline. Keep the only admission slot until it ends.
                 deferred_release = True
                 self._retain_release(work)
-                return _error("enhancement_timeout")
+                raise EnhanceError("enhancement_timeout")
             except asyncio.CancelledError:
                 if not self._closing:
                     deferred_release = True
@@ -379,12 +402,12 @@ class TextEnhancer:
                 raise
             except UpstreamCompletionUnknown:
                 self._latch_unknown()
-                return _error("enhancement_unavailable")
-            except EnhanceError as failure:
-                return failure.response()
+                raise EnhanceError("enhancement_unavailable")
+            except EnhanceError:
+                raise
             except Exception as exc:  # noqa: BLE001 - never leak internals
                 logger.warning("text enhancement failed: kind=%s", type(exc).__name__)
-                return _error("enhancement_unavailable")
+                raise EnhanceError("enhancement_unavailable")
 
             # `language` is validated for the agreed client contract but is
             # deliberately not injected: the current corrector prompt does the
@@ -397,9 +420,9 @@ class TextEnhancer:
                           "raw_text": text, "enhanced_text": corrected}
             logger.info("text enhancement ok: status=%s chars_in=%d chars_out=%d",
                         result["status"], len(text), len(corrected))
-            return JSONResponse(result)
+            return result
         finally:
-            if admitted and not deferred_release:
+            if not deferred_release:
                 self._slot.release()
 
     def _retain_release(self, work):
