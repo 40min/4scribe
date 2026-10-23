@@ -186,5 +186,26 @@ and container acceptance remain.
 
 ## Out of scope
 
-Inline batch/WS enhancement flags and legacy service retirement are not done.
+Inline batch/WS correction is prepared in source; deployment and client acceptance are separate.
 No glossary/new-model work or automatic latch recovery is introduced.
+
+
+## Shared inline correction engine
+
+Batch enhance=true and strict realtime session.enhance=true reuse this exact
+engine instance. All entry points share one no-queue slot. Standalone HTTP
+returns 429 enhancement_busy; batch retains raw HTTP 200 with enhancer_error;
+realtime reports an optional segment-linked error. Inline callers use their
+existing route credentials, without another request. A valid dedicated
+enhancement token must configure the engine; unavailable correction never
+disables ASR.
+
+Text/response caps, deadline, shielded native work, deferred release and unknown
+completion latch are shared. Wrapper cancellation never releases native
+capacity early. Batch releases the ASR semaphore before correction. Realtime
+starts correction after raw final/commit ACK emission and never awaits it in
+finalization, commit draining or close. Independent application locks do not
+promise absence of physical CPU/model contention.
+
+The existing standalone JSON/errors, prompt/model and configuration/residency
+behavior are unchanged. See [realtime contract](realtime-enhancement.md).

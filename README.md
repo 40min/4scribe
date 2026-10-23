@@ -63,7 +63,7 @@ optional 4scribe provider was implemented, tested and deployed by the owner.
 
 Batch requests use `POST /4scribe/v1/audio/transcriptions`, multipart field
 `file`, and the separate `FSCRIBE_MOBILE_TOKEN`. The WebSocket token
-`FSCRIBE_TOKEN` is unchanged. Batch performs no text enhancement. See
+`FSCRIBE_TOKEN` is unchanged. Batch defaults to raw output and supports opt-in enhance=true. See
 `docs/mobile-batch-api.md` for limits and response fields.
 
 Source/development checkout: `/opt/40zen/repos/4scribe`. Runtime Compose and the
@@ -74,7 +74,7 @@ enhancement all use this one 4scribe server. The legacy Parakeet/Nemotron stack
 was retired permanently on 2026-10-21 with no backup; old routes, models, images
 and credentials are absent. See `docs/container-permanent.md` for operations.
 
-Inline batch/WS enhancement flags remain **To-do** and are not enabled. This
+Inline batch/WS correction is prepared in source and defaults off; deployment and client acceptance are separate. This
 retirement does not claim any model-quality improvement.
 
 Pre-decode speech verification uses pinned `silero-vad==6.2.3` (MIT, bundled
@@ -116,10 +116,22 @@ no new full host-suite result is claimed. Public endpoint:
 The original `qwen3:0.6b` corrector is unchanged; raw text stays canonical.
 Client deadline is 5 seconds, upstream wall-clock budget 60 seconds, with
 fail-closed latch and explicit safe restart recovery. ASR model keep-alive is
-`-1` in canonical/runtime Compose. Inline batch/WS enhancement is not enabled.
+`-1` in canonical/runtime Compose. Inline batch/WS correction defaults off (source preparation does not imply deployment).
 
 Owner-accepted Loqui meeting `4dd5a489` (15:46:31–15:47:21 UTC) made two
 external enhancement calls: HTTP 200, unchanged outputs of 110/105 characters.
 No errors, busy responses, timeouts, latch or container restarts were observed.
 This proves integration, not correction-quality improvement. Completed one-shot
 promotion scripts were removed; reusable candidate smoke/acceptance remain.
+
+
+## Optional inline correction
+
+Batch accepts multipart enhance=true|false (default false, with query fallback).
+Realtime accepts strict boolean session.enhance and acknowledges applied.enhance.
+Both reuse the existing configured enhancement engine without another client
+roundtrip. Raw batch success survives correction failures. Raw realtime finals,
+words and commit ACKs remain immediate; best-effort correction arrives later,
+linked by segment_id. Corrections may be dropped under pressure or on
+cancel/disable/close. See the [batch contract](docs/mobile-batch-api.md) and
+[realtime contract](docs/realtime-enhancement.md).

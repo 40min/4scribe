@@ -50,6 +50,8 @@ class BoundedEventQueue:
     """Ordered event queue with a HARD finite bound and explicit overload.
 
     put() is sync and NEVER blocks (no producer tasks pile up). Policy:
+    - nonoptional events preserve their order and precede queued enhancements;
+    - optional enhancement results may be dropped/evicted without overload;
     - a stale provisional delta arriving at capacity is dropped (counted);
       the next revision/final supersedes it;
     - a final/ACK/error at capacity first evicts droppable deltas to make room;
@@ -64,6 +66,7 @@ class BoundedEventQueue:
         self.maxsize = max(maxsize, 1)
         self._q = collections.deque()
         self._ready = asyncio.Event()
+        self.dropped_enhancements = 0
         self.dropped_deltas = 0
         self.overflows = 0
         self.overload_fired = False
@@ -73,8 +76,22 @@ class BoundedEventQueue:
     def _is_delta(ev):
         return (ev.get("type") or "").endswith(".delta")
 
+    @staticmethod
+    def _is_optional(ev):
+        return ev.get("type") == "conversation.item.input_audio_transcription.enhanced"
+
     def put(self, ev):
         if len(self._q) >= self.maxsize:
+            if self._is_optional(ev):
+                self.dropped_enhancements += 1
+                return
+            for i, queued in enumerate(self._q):
+                if self._is_optional(queued):
+                    del self._q[i]
+                    self.dropped_enhancements += 1
+                    self._append(ev)
+                    self._ready.set()
+                    return
             if self._is_delta(ev):
                 self.dropped_deltas += 1
                 logger.warning("outbound backpressure: dropped provisional delta "
@@ -84,7 +101,7 @@ class BoundedEventQueue:
                 if self._is_delta(e):
                     del self._q[i]
                     self.dropped_deltas += 1
-                    self._q.append(ev)
+                    self._append(ev)
                     self._ready.set()
                     return
             # hard bound reached, nothing droppable: explicit overload
@@ -96,8 +113,22 @@ class BoundedEventQueue:
                 if self._on_overload is not None:
                     self._on_overload()
             return
-        self._q.append(ev)
+        self._append(ev)
         self._ready.set()
+
+    def _append(self, ev):
+        # Already-sending events cannot be preempted, but pending optional
+        # corrections must never sit ahead of a raw final, ACK or other event.
+        if not self._is_optional(ev):
+            for i, queued in enumerate(self._q):
+                if self._is_optional(queued):
+                    self._q.insert(i, ev)
+                    return
+        self._q.append(ev)
+
+    def discard_enhancements(self):
+        """Discard optional corrections invalidated by cancel/disable/close."""
+        self._q = collections.deque(e for e in self._q if not self._is_optional(e))
 
     async def get(self):
         while not self._q:
@@ -141,7 +172,7 @@ def create_app(cfg: Config = None, http_factory=None, aligner=None, verifier=Non
     align_sem = asyncio.Semaphore(cfg.aligner_workers)
     decode_sem = asyncio.Semaphore(cfg.inference_workers)
 
-    # Standalone text correction has its OWN single admission slot and async
+    # Standalone and inline text correction share one admission slot and async
     # HTTP client; it never takes the ASR decode semaphore, so correction and
     # transcription are not serialized by an application lock. The async client
     # is created on startup and closed on shutdown, never at module import.
@@ -161,7 +192,7 @@ def create_app(cfg: Config = None, http_factory=None, aligner=None, verifier=Non
     # semaphore and single-pool Silero verifier; disabled (503) unless a
     # separate FSCRIBE_MOBILE_TOKEN is configured. See batch.py.
     batch = BatchTranscriber(cfg, asr=asr, pool=pool, decode_sem=decode_sem,
-                             verifier=verifier, vad_pool=vad_pool)
+                             verifier=verifier, vad_pool=vad_pool, enhancer=enhancer)
     app.state.batch_transcriber = batch
     app.state.decode_pool = pool
     app.state.decode_sem = decode_sem
@@ -210,7 +241,8 @@ def create_app(cfg: Config = None, http_factory=None, aligner=None, verifier=Non
         session = RealtimeSession(cfg, asr, aligner, pool, sink,
                                   align_pool=align_pool, align_sem=align_sem,
                                   decode_sem=decode_sem, tracer=tracer,
-                                  verifier=verifier, vad_pool=vad_pool)
+                                  verifier=verifier, vad_pool=vad_pool, enhancer=enhancer,
+                                  discard_enhancements=outbound.discard_enhancements)
 
         # HARD overload path: one bounded shutdown task (never per event);
         # must not depend on the possibly stalled pump.
