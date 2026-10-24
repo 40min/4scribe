@@ -417,7 +417,7 @@ def test_asr_failure_maps_to_502(monkeypatch):
     assert resp.json()["error"] == "asr_unavailable"
 
 
-def test_legacy_enhance_flag_is_ignored_without_llm_call(monkeypatch):
+def test_enabled_enhancement_unconfigured_preserves_raw_success(monkeypatch):
     app, mock, _ = make_app(monkeypatch, converter=fake_converter())
     with TestClient(app) as client:
         resp = client.post(PATH + "?enhance=true", headers=AUTH,
@@ -425,8 +425,8 @@ def test_legacy_enhance_flag_is_ignored_without_llm_call(monkeypatch):
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["enhanced_text"] is None
-    assert payload["enhancer_error"] is False
-    assert payload["enhancer_ms"] == 0
+    assert payload["enhancer_error"] is True
+    assert payload["enhancer_ms"] >= 0
     assert len(mock.requests) == 1, "no enhancer/extra model call allowed"
 
 

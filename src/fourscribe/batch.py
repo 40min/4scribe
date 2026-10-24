@@ -10,8 +10,8 @@ Request
   (no assistant prefill, exactly like the current Android omission).
 
 Response (all numeric fields are finite, non-negative, never null)
-  text, enhanced_text=null, enhancer_error=false, language, audio_duration_ms,
-  conversion_ms, stt_ms, enhancer_ms=0, server_total_ms, rtf
+  text (raw), enhanced_text, enhancer_error, language, audio_duration_ms,
+  conversion_ms, stt_ms, enhancer_ms, server_total_ms, rtf
 
 Design guards (see docs/mobile-batch-api.md for the owner-facing summary):
 - Separate mobile Bearer, constant-time compare, validated before any body
@@ -30,9 +30,9 @@ Design guards (see docs/mobile-batch-api.md for the owner-facing summary):
   timeout/cancel. Duration is measured on the DECODED PCM, never metadata.
 - The 61 s client limit is preserved without truncation: PCM is split at the
   lowest-energy point into windows <= FSCRIBE_MOBILE_ASR_WINDOW_S (40 s
-  default) and stitched verbatim. No LLM rewrite, no invented word dedup.
-- No enhancer: `enhanced_text` is null, `enhancer_error` false, `enhancer_ms`
-  numeric 0. An old `enhance` flag is accepted and ignored; no LLM call.
+  default) and stitched verbatim into raw text, with no invented word dedup.
+- Optional enhance=true runs the shared corrector after releasing ASR capacity.
+  Default false; correction failure preserves successful raw transcription.
 - Logs carry status/sizes/timings only - never audio, transcripts or tokens.
 """
 import asyncio
@@ -45,6 +45,8 @@ import subprocess
 import tempfile
 import threading
 import time
+
+from .enhancement import EnhanceError
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -437,7 +439,8 @@ async def _drain_future(fut):
 class BatchTranscriber:
     """One-shot multipart transcription over the app's shared inference seams."""
 
-    def __init__(self, cfg, *, asr, pool, decode_sem, verifier, vad_pool=None):
+    def __init__(self, cfg, *, asr, pool, decode_sem, verifier, vad_pool=None, enhancer=None):
+        self.enhancer = enhancer
         self.cfg = cfg
         self.asr = asr
         self.pool = pool
@@ -496,6 +499,10 @@ class BatchTranscriber:
             form, upload = await self._extract_upload(request, body, deadline)
             language = _resolve_language(_form_text(form, "language",
                                                     request.query_params.get("language")))
+            enhance_value = form.get("enhance", request.query_params.get("enhance", "false"))
+            if enhance_value not in ("true", "false"):
+                raise BatchError(400, "invalid_enhance", "enhance must be true or false")
+            enhance = enhance_value == "true"
             content_type = upload.content_type
             filename = upload.filename
             data = await upload.read(MAX_FILE_BYTES + 1)
@@ -526,7 +533,21 @@ class BatchTranscriber:
                                          started, mode="verifier_declined")
                 texts, stt_s = await self._transcribe(pcm, language, deadline)
             text = stitch_texts(texts)
-            return self._success(text, language, samples, conversion_s, stt_s, started)
+            enhancement = None
+            enhancer_ms = 0
+            enhancer_error = False
+            if enhance and text.strip():
+                enhancement_started = time.monotonic()
+                try:
+                    if self.enhancer is None:
+                        raise EnhanceError("enhancement_unavailable")
+                    enhancement = await self.enhancer.correct(text, language or "auto")
+                except Exception:  # optional correction cannot erase ASR success
+                    enhancer_error = True
+                enhancer_ms = round((time.monotonic() - enhancement_started) * 1000, 3)
+            return self._success(text, language, samples, conversion_s, stt_s, started,
+                                 enhancement=enhancement, enhancer_ms=enhancer_ms,
+                                 enhancer_error=enhancer_error)
         except BatchError as exc:
             logger.info("batch transcription rejected: status=%d code=%s",
                         exc.status, exc.code)
@@ -765,18 +786,18 @@ class BatchTranscriber:
                              "speech recognition is unavailable") from exc
 
     def _success(self, text, language, samples, conversion_s, stt_s, started,
-                 mode="ok"):
+                 mode="ok", enhancement=None, enhancer_ms=0, enhancer_error=False):
         audio_s = samples / SAMPLE_RATE
         total_s = time.monotonic() - started
         payload = {
             "text": text,
-            "enhanced_text": None,
-            "enhancer_error": False,
+            "enhanced_text": enhancement["enhanced_text"] if enhancement else None,
+            "enhancer_error": enhancer_error,
             "language": language or "auto",
             "audio_duration_ms": int(round(audio_s * 1000)),
             "conversion_ms": int(round(conversion_s * 1000)),
             "stt_ms": int(round(stt_s * 1000)),
-            "enhancer_ms": 0,
+            "enhancer_ms": enhancer_ms,
             "server_total_ms": int(round(total_s * 1000)),
             "rtf": round(stt_s / audio_s, 3) if audio_s > 0 else 0.0,
         }

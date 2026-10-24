@@ -31,6 +31,7 @@ def final_event(text: str, audio_processed: float, words: list,
                 alignment: dict) -> dict:
     return {"type": "conversation.item.input_audio_transcription.completed",
             "event_id": new_event_id(),
+            "segment_id": new_event_id(),
             "transcript": text,
             "audio_processed": round(audio_processed, 3),
             "words": words or [],
@@ -45,3 +46,14 @@ def committed_event(audio_processed: float) -> dict:
 def error_event(code: str, message: str) -> dict:
     return {"type": "error", "event_id": new_event_id(),
             "code": code, "message": message}
+
+
+def enhanced_event(segment_id, enhanced_text, enhancer_error, enhancer_ms,
+                   status, error_code=None):
+    ev = {"type": "conversation.item.input_audio_transcription.enhanced",
+          "event_id": new_event_id(), "segment_id": segment_id,
+          "enhanced_text": enhanced_text, "enhancer_error": enhancer_error,
+          "enhancer_ms": enhancer_ms, "status": status}
+    if error_code:
+        ev["error"] = {"code": error_code}
+    return ev
